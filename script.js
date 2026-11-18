@@ -1,4 +1,4 @@
-const GOOGLE_DRIVE_BACKUP_URL = 'https://script.google.com/macros/s/AKfycbz8tJUXmGfMKRAYpu0JX0bmHZfwjOoO-h-y-SA3G2o9DYNJKzSlK5uXGNOpxkktbNoqDQ/exec';
+const GOOGLE_DRIVE_BACKUP_URL = 'https://script.google.com/macros/s/AKfycbwjktbML7AfNINjXE9YDc8EIjBi5zfRKTyWcvUB_Aqhd6fURY0ej-tiPC1eoo041yQwvw/exec';
 let backupDriveEmAndamento = false;
 
 let state = {
@@ -138,6 +138,28 @@ function isMesPassado(yearMonth) {
     return yearMonth < atualYearMonth;
 }
 
+function obterUltimoDiaMes(yearMonth) {
+    const [ano, mes] = yearMonth.split('-').map(Number);
+    return new Date(ano, mes, 0).getDate();
+}
+
+function aplicarMascaraMoeda(input) {
+    let valorLimpo = input.value.replace(/\D/g, '');
+    if (!valorLimpo) {
+        input.value = '';
+        return;
+    }
+    let numero = parseInt(valorLimpo, 10) / 100;
+    input.value = numero.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function obterValorNumericoMascara(idElemento) {
+    const el = document.getElementById(idElemento);
+    if (!el || !el.value) return 0;
+    const limpo = el.value.replace(/\./g, '').replace(',', '.');
+    return parseFloat(limpo) || 0;
+}
+
 function renderHeaderMesFixo() {
     return `
         <div class="header-mes-sutil">
@@ -152,7 +174,7 @@ function obterSemanasDoMes(yearMonth) {
     const ano = parseInt(anoStr, 10);
     const mes = parseInt(mesStr, 10);
 
-    const ultimoDiaMes = new Date(ano, mes, 0).getDate();
+    const ultimoDiaMes = obterUltimoDiaMes(yearMonth);
     let semanas = [];
 
     let proxAno = ano;
@@ -211,8 +233,7 @@ function obterSemanasDoMes(yearMonth) {
 
 function calcularDadosSemanais(yearMonth) {
     const semanas = obterSemanasDoMes(yearMonth);
-    const [ano, mes] = yearMonth.split('-').map(Number);
-    const diasNoMes = new Date(ano, mes, 0).getDate();
+    const diasNoMes = obterUltimoDiaMes(yearMonth);
     const fimCicloIso = semanas.length > 0 ? semanas[semanas.length - 1].fimIso : `${yearMonth}-${String(diasNoMes).padStart(2, '0')}`;
     const hojeIsoStr = hojeIso();
 
@@ -592,13 +613,15 @@ function renderFormReceita() {
     let htmlReceitas = '';
     const passado = isMesPassado(state.selectedYearMonth);
     const recebidasMes = state.data.receitas.filter(r => r.dataIso && r.dataIso.startsWith(state.selectedYearMonth));
+    const ultimoDia = obterUltimoDiaMes(state.selectedYearMonth);
+    const diaHojeSugerido = Math.min(new Date().getDate(), ultimoDia);
 
     recebidasMes.forEach(r => {
         const botaoExcluir = passado ? '' : `<button class="btn-danger" style="width: auto; padding: 10px 14px; font-size: 15px; height: auto;" onclick="excluirReceita('${r.id}')">Excluir</button>`;
         htmlReceitas += `
             <div class="list-item">
                 <div style="flex-grow: 1; text-align: left;">
-                    <strong>${r.descricao}</strong><br><small style="color: #475569; font-weight: bold;">Data: ${r.dataIso.split('-').reverse().join('/')}</small><br>
+                    <strong>${r.descricao}</strong><br><small style="color: #475569; font-weight: bold;">Dia: ${r.dataIso.split('-')[2]}</small><br>
                     <span style="color: #065f46; font-size: 20px; font-weight: 800;">${fmtMoeda(r.valor)}</span>
                 </div>
                 ${botaoExcluir}
@@ -612,9 +635,9 @@ function renderFormReceita() {
         <label>De onde veio esse dinheiro?</label>
         <input type="text" id="desc-rec" placeholder="Ex: Salário, Aposentadoria...">
         <label>Valor recebido (R$)</label>
-        <input type="number" step="0.01" id="val-rec" placeholder="0,00">
-        <label>Data que recebeu</label>
-        <input type="date" id="data-rec" max="${hojeIso()}" value="${hojeIso()}" onchange="validarDataInput(this)">
+        <input type="text" id="val-rec" placeholder="0,00" inputmode="numeric" oninput="aplicarMascaraMoeda(this)">
+        <label>Dia que recebeu</label>
+        <input type="number" id="dia-rec" min="1" max="${ultimoDia}" value="${diaHojeSugerido}">
         
         <div class="form-actions">
             <button class="fab-back" onclick="navegar('home')">← Voltar</button>
@@ -641,24 +664,20 @@ function renderFormReceita() {
     return div;
 }
 
-function validarDataInput(input) {
-    if (input.value > hojeIso()) {
-        alert('Não é permitido selecionar uma data no futuro!');
-        input.value = hojeIso();
-    }
-}
-
 function salvarReceita() {
     if (isMesPassado(state.selectedYearMonth)) { alert('Não é permitido alterar meses passados.'); return; }
     const desc = document.getElementById('desc-rec').value.trim();
-    const val = parseFloat(document.getElementById('val-rec').value.replace(',', '.'));
-    const data = document.getElementById('data-rec').value;
+    const val = obterValorNumericoMascara('val-rec');
+    const dia = parseInt(document.getElementById('dia-rec').value, 10);
+    const ultimoDia = obterUltimoDiaMes(state.selectedYearMonth);
     
-    if (!desc || isNaN(val) || val <= 0 || !data) { alert('Preencha todos os campos corretamente!'); return; }
-    if (data > hojeIso()) { alert('Não é permitido registrar recebimentos com data no futuro!'); return; }
+    if (!desc || isNaN(val) || val <= 0 || isNaN(dia)) { alert('Preencha todos os campos corretamente!'); return; }
+    if (dia < 1 || dia > ultimoDia) { alert(`O dia deve estar entre 1 e ${ultimoDia} para este mês!`); return; }
 
-    state.data.receitas.push({ id: crypto.randomUUID(), descricao: desc, valor: val, dataIso: data });
-    registrarChangelog('Adicionado', 'Recebido', desc, val, data);
+    const dataIso = `${state.selectedYearMonth}-${String(dia).padStart(2, '0')}`;
+
+    state.data.receitas.push({ id: crypto.randomUUID(), descricao: desc, valor: val, dataIso: dataIso });
+    registrarChangelog('Adicionado', 'Recebido', desc, val, dataIso);
     saveData();
     state.currentScreen = 'success';
     state.successMessage = 'recebimento';
@@ -685,6 +704,8 @@ function renderFormDespesa() {
     let htmlDespesas = '';
     const passado = isMesPassado(state.selectedYearMonth);
     const despesasMes = state.data.despesas.filter(d => !d.contaFixaId && d.dataIso && d.dataIso.startsWith(state.selectedYearMonth));
+    const ultimoDia = obterUltimoDiaMes(state.selectedYearMonth);
+    const diaHojeSugerido = Math.min(new Date().getDate(), ultimoDia);
 
     despesasMes.forEach(d => {
         const catTxt = d.categoria ? ` • ${d.categoria}` : '';
@@ -693,7 +714,7 @@ function renderFormDespesa() {
         htmlDespesas += `
             <div class="list-item">
                 <div style="flex-grow: 1; text-align: left;">
-                    <strong>${d.descricao}</strong><br><small style="color: #475569; font-weight: bold;">Data: ${d.dataIso.split('-').reverse().join('/')}${catTxt}${formaPgtoTxt}</small><br>
+                    <strong>${d.descricao}</strong><br><small style="color: #475569; font-weight: bold;">Dia: ${d.dataIso.split('-')[2]}${catTxt}${formaPgtoTxt}</small><br>
                     <span style="color: #991b1b; font-size: 20px; font-weight: 800;">${fmtMoeda(d.valor)}</span>
                 </div>
                 ${botaoExcluir}
@@ -705,10 +726,10 @@ function renderFormDespesa() {
         <div class="badge-visualizacao">🔒 Mês passado em modo somente visualização. Não é possível adicionar novos gastos.</div>
     ` : `
         <label>Quanto você gastou? (R$)</label>
-        <input type="number" step="0.01" id="val-desp" placeholder="0,00">
+        <input type="text" id="val-desp" placeholder="0,00" inputmode="numeric" oninput="aplicarMascaraMoeda(this)">
         <label>Com o quê você gastou?</label>
         <input type="text" id="desc-desp" placeholder="Ex: Mercado, Farmácia...">
-        <label>Categoria</label>
+        <label>Categoria (opcional)</label>
         <select id="categoria-desp">
             <option value="">Selecione uma categoria</option>
             <option value="Açougue">Açougue</option>
@@ -729,8 +750,8 @@ function renderFormDespesa() {
             <option value="Pix">Pix</option>
             <option value="Dinheiro">Dinheiro</option>
         </select>
-        <label>Data do gasto</label>
-        <input type="date" id="data-desp" max="${hojeIso()}" value="${hojeIso()}" onchange="validarDataInput(this)">
+        <label>Dia do gasto</label>
+        <input type="number" id="dia-desp" min="1" max="${ultimoDia}" value="${diaHojeSugerido}">
         
         <div class="form-actions">
             <button class="fab-back" onclick="navegar('home')">← Voltar</button>
@@ -759,26 +780,29 @@ function renderFormDespesa() {
 
 function salvarDespesa() {
     if (isMesPassado(state.selectedYearMonth)) { alert('Não é permitido alterar meses passados.'); return; }
-    const val = parseFloat(document.getElementById('val-desp').value.replace(',', '.'));
+    const val = obterValorNumericoMascara('val-desp');
     const desc = document.getElementById('desc-desp').value.trim();
     const categoria = document.getElementById('categoria-desp').value;
     const formaPagamento = document.getElementById('forma-pagamento-desp').value;
-    const data = document.getElementById('data-desp').value;
+    const dia = parseInt(document.getElementById('dia-desp').value, 10);
+    const ultimoDia = obterUltimoDiaMes(state.selectedYearMonth);
     
-    if (!desc || isNaN(val) || val <= 0 || !data) { alert('Preencha todos os campos corretamente!'); return; }
-    if (data > hojeIso()) { alert('Não é permitido registrar gastos com data no futuro!'); return; }
+    if (!desc || isNaN(val) || val <= 0 || isNaN(dia)) { alert('Preencha todos os campos corretamente!'); return; }
+    if (dia < 1 || dia > ultimoDia) { alert(`O dia deve estar entre 1 e ${ultimoDia} para este mês!`); return; }
+
+    const dataIso = `${state.selectedYearMonth}-${String(dia).padStart(2, '0')}`;
 
     state.data.despesas.push({ 
         id: crypto.randomUUID(), 
         descricao: desc, 
         valor: val, 
-        dataIso: data,
+        dataIso: dataIso,
         categoria: categoria || '',
         formaPagamento: formaPagamento 
     });
 
     const detalhesLog = [categoria, formaPagamento].filter(Boolean).join(' • ');
-    registrarChangelog('Adicionado', 'Gasto', desc, val, data, detalhesLog);
+    registrarChangelog('Adicionado', 'Gasto', desc, val, dataIso, detalhesLog);
     saveData();
     state.currentScreen = 'success';
     state.successMessage = 'gasto';
@@ -817,8 +841,8 @@ function renderFormContaFixa() {
         
         let infoSub = `Vencimento dia ${c.diaVencimento}`;
         if (estaPaga && pagamentoInfo.dataIso) {
-            const [anoP, mesP, diaP] = pagamentoInfo.dataIso.split('-');
-            infoSub = `Vencimento dia ${c.diaVencimento} • Pago em ${diaP}/${mesP}/${anoP}`;
+            const diaP = pagamentoInfo.dataIso.split('-')[2];
+            infoSub = `Vencimento dia ${c.diaVencimento} • Pago no dia ${diaP}`;
         }
 
         const statusHtml = estaPaga 
@@ -854,7 +878,7 @@ function renderFormContaFixa() {
         <label>Nome da Conta Fixa</label>
         <input type="text" id="desc-conta" placeholder="Ex: MEI, Luz, Internet...">
         <label>Valor estimado (R$)</label>
-        <input type="number" step="0.01" id="val-conta" placeholder="0,00">
+        <input type="text" id="val-conta" placeholder="0,00" inputmode="numeric" oninput="aplicarMascaraMoeda(this)">
         <label>Dia do vencimento</label>
         <input type="number" id="dia-conta" min="1" max="31" placeholder="Ex: 10">
         
@@ -886,7 +910,7 @@ function renderFormContaFixa() {
 function salvarContaFixa() {
     if (isMesPassado(state.selectedYearMonth)) { alert('Não é permitido alterar meses passados.'); return; }
     const desc = document.getElementById('desc-conta').value.trim();
-    const val = parseFloat(document.getElementById('val-conta').value.replace(',', '.'));
+    const val = obterValorNumericoMascara('val-conta');
     const diaVenc = parseInt(document.getElementById('dia-conta').value, 10);
 
     if (!desc || isNaN(val) || val <= 0) { alert('Preencha a descrição e o valor corretamente!'); return; }
@@ -937,24 +961,23 @@ function renderConfirmPagamento() {
     const c = state.activeContaParaPagar;
     const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
     const valorAtual = pagamentoInfo !== undefined ? pagamentoInfo.valor : c.valorMedio;
-    const dataAtual = pagamentoInfo !== undefined ? pagamentoInfo.dataIso : hojeIso();
+    const ultimoDia = obterUltimoDiaMes(state.selectedYearMonth);
+    const diaAtual = pagamentoInfo !== undefined && pagamentoInfo.dataIso ? parseInt(pagamentoInfo.dataIso.split('-')[2], 10) : Math.min(c.diaVencimento, ultimoDia);
     const jaPaga = pagamentoInfo !== undefined;
 
     const tituloTela = jaPaga ? `Alterar valor pago: ${c.descricao}` : `Pagar conta: ${c.descricao}`;
-    const inputDataHtml = jaPaga 
-        ? `<input type="date" value="${dataAtual}" disabled style="background:#e2e8f0; color:#64748b; margin-bottom:20px;" />` 
-        : `<input type="date" id="data-real-pago" max="${hojeIso()}" value="${dataAtual}" onchange="validarDataInput(this)">`;
+    const valorFormatadoInicial = valorAtual.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-    const div = document.createElement('div');
+    div = document.createElement('div');
     div.innerHTML = `
         <div>
             ${renderHeaderMesFixo()}
             <h2 style="font-size: 22px; text-align: left; margin-bottom: 16px; color: #ffffff;">${tituloTela}</h2>
             <label style="margin-top:20px;">Valor real pago (R$):</label>
-            <input type="number" step="0.01" id="val-real-pago" value="${valorAtual}">
+            <input type="text" id="val-real-pago" value="${valorFormatadoInicial}" inputmode="numeric" oninput="aplicarMascaraMoeda(this)">
             
-            <label>Data do pagamento</label>
-            ${inputDataHtml}
+            <label>Dia do pagamento</label>
+            <input type="number" id="dia-real-pago" min="1" max="${ultimoDia}" value="${diaAtual}">
             
             <div class="form-actions">
                 <button class="fab-back" onclick="navegar('conta')">← Voltar</button>
@@ -968,14 +991,16 @@ function renderConfirmPagamento() {
 
 function confirmarPagamentoReal() {
     if (isMesPassado(state.selectedYearMonth)) return;
-    const valReal = parseFloat(document.getElementById("val-real-pago").value.replace(',', '.'));
-    const elData = document.getElementById("data-real-pago");
+    const valReal = obterValorNumericoMascara('val-real-pago');
+    const elDia = document.getElementById("dia-real-pago");
+    const ultimoDia = obterUltimoDiaMes(state.selectedYearMonth);
+    const diaPagamento = elDia ? parseInt(elDia.value, 10) : 1;
     const pagamentoAnterior = state.data.pagamentosContas[`${state.activeContaParaPagar.id}_${state.selectedYearMonth}`];
-    const dataReal = elData ? elData.value : (pagamentoAnterior?.dataIso || hojeIso());
     
-    if (isNaN(valReal) || valReal <= 0 || !dataReal) { alert('Preencha os campos corretamente!'); return; }
-    if (elData && dataReal > hojeIso()) { alert('Não é permitido registrar pagamentos com data no futuro!'); return; }
+    if (isNaN(valReal) || valReal <= 0 || isNaN(diaPagamento)) { alert('Preencha os campos corretamente!'); return; }
+    if (diaPagamento < 1 || diaPagamento > ultimoDia) { alert(`O dia deve estar entre 1 e ${ultimoDia} para este mês!`); return; }
 
+    const dataReal = `${state.selectedYearMonth}-${String(diaPagamento).padStart(2, '0')}`;
     const c = state.activeContaParaPagar;
     state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`] = { valor: valReal, dataIso: dataReal };
 
@@ -1025,8 +1050,7 @@ function calcularResumo() {
     const dadosSemanas = calcularDadosSemanais(state.selectedYearMonth);
 
     if (state.summaryType === 'mes') {
-        const [ano, mes] = state.selectedYearMonth.split('-').map(Number);
-        const diasNoMes = new Date(ano, mes, 0).getDate();
+        const diasNoMes = obterUltimoDiaMes(state.selectedYearMonth);
 
         const avulsas = arredondar(
             state.data.despesas
@@ -1262,7 +1286,7 @@ function obterItensCronologicos() {
             const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
             const valorEfetivo = (pagamentoInfo !== undefined && pagamentoInfo.valor !== undefined) ? pagamentoInfo.valor : c.valorMedio;
             
-            let dataItem = `${state.selectedYearMonth}-${String(Math.min(c.diaVencimento, new Date(state.selectedYearMonth.split('-')[0], state.selectedYearMonth.split('-')[1], 0).getDate())).padStart(2,'0')}`;
+            let dataItem = `${state.selectedYearMonth}-${String(Math.min(c.diaVencimento, obterUltimoDiaMes(state.selectedYearMonth))).padStart(2,'0')}`;
             if (pagamentoInfo !== undefined && pagamentoInfo.dataIso) {
                 dataItem = pagamentoInfo.dataIso;
             }
@@ -1352,7 +1376,7 @@ function compartilharChangelog() {
             let refFmt = '';
             if (item.dataRef) {
                 const partes = item.dataRef.split('-');
-                refFmt = partes.length === 3 ? ` | Ref: ${partes[2]}/${partes[1]}/${partes[0]}` : ` | Ref: ${item.dataRef}`;
+                refFmt = partes.length === 3 ? ` | Dia ${partes[2]}/${partes[1]}` : ` | Ref: ${item.dataRef}`;
             }
 
             const extraFmt = item.detalheExtra ? ` (${item.detalheExtra})` : '';
@@ -1416,11 +1440,10 @@ function exportarTextoWhatsApp() {
     txt += `📅 *EXTRATO CRONOLÓGICO:*\n`;
     if (itens.length === 0) txt += `Nenhum lançamento neste mês.\n`;
     itens.forEach(i => {
-        const [ano, mes, dia] = i.data.split('-');
-        const dataFmt = `${dia}/${mes}/${ano}`;
+        const dia = i.data.split('-')[2];
         const sinal = i.tipo === 'Recebido' ? '+' : '-';
         const catFmt = i.categoria ? ` [${i.categoria}]` : '';
-        txt += `${dataFmt} | ${i.tipo}${catFmt}: ${i.desc} (${sinal}${fmtMoeda(i.valor)})\n`;
+        txt += `Dia ${dia} | ${i.tipo}${catFmt}: ${i.desc} (${sinal}${fmtMoeda(i.valor)})\n`;
     });
 
     if (navigator.share) {
@@ -1435,13 +1458,12 @@ function exportarExcelCsv() {
     const itens = obterItensCronologicos();
     const totaisCat = obterTotaisPorCategoria();
 
-    let csv = "\uFEFFData;Tipo;Categoria;Descricao;Valor (R$)\n";
+    let csv = "\uFEFFDia;Tipo;Categoria;Descricao;Valor (R$)\n";
     itens.forEach(i => {
-        const [ano, mes, dia] = i.data.split('-');
-        const dataFmt = `${dia}/${mes}/${ano}`;
+        const dia = i.data.split('-')[2];
         const sinal = i.tipo === 'Recebido' ? '' : '-';
         const valStr = i.valor.toFixed(2).replace('.', ',');
-        csv += `${dataFmt};${i.tipo};${i.categoria || ''};${i.desc};${sinal}${valStr}\n`;
+        csv += `Dia ${dia};${i.tipo};${i.categoria || ''};${i.desc};${sinal}${valStr}\n`;
     });
 
     if (totaisCat.length > 0) {
@@ -1486,16 +1508,20 @@ function processarArquivoCsv(event) {
                 const colunas = linha.split(';');
                 if (colunas.length < 4) continue;
 
-                const dataBr = colunas[0].trim();
+                const colData = colunas[0].trim();
                 const tipo = colunas[1].trim();
                 const temColunaCategoria = colunas.length >= 5;
                 const categoria = temColunaCategoria ? colunas[2].trim() : '';
                 const descricao = (temColunaCategoria ? colunas[3] : colunas[2]).trim();
                 let valorStr = (temColunaCategoria ? colunas[4] : colunas[3]).trim();
 
-                const partesData = dataBr.split('/');
-                if (partesData.length !== 3) continue;
-                const dataIso = `${partesData[2]}-${partesData[1]}-${partesData[0]}`;
+                let diaStr = colData.replace(/\D/g, '');
+                if (!diaStr) continue;
+                const dia = parseInt(diaStr, 10);
+                const ultimoDia = obterUltimoDiaMes(state.selectedYearMonth);
+                if (dia < 1 || dia > ultimoDia) continue;
+
+                const dataIso = `${state.selectedYearMonth}-${String(dia).padStart(2, '0')}`;
 
                 valorStr = valorStr.replace('R$', '').replace(/\s/g, '').replace('.', '').replace(',', '.');
                 const valor = Math.abs(parseFloat(valorStr));
@@ -1572,7 +1598,7 @@ function verificarContasVencendoHoje() {
         const fimOk = !c.mesFimIso || c.mesFimIso >= mesAtual;
         if (!inicioOk || !fimOk) return;
 
-        const diaValido = Math.min(c.diaVencimento, new Date(ano, mes, 0).getDate());
+        const diaValido = Math.min(c.diaVencimento, obterUltimoDiaMes(mesAtual));
         if (diaValido === diaHoje) {
             setTimeout(() => {
                 const el = document.getElementById('aviso-vencimento-hoje');
