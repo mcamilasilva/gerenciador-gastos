@@ -210,7 +210,7 @@
                 </div>
 
                 <div class="banner-semana" style="background-color: ${corBanner}; color: ${corTexto}; border: 2px solid ${bordaBanner};">
-                    Disponível para gastar esta semana: ${fmtMoeda(disponivelSemana)}
+                    Disponível para gastar nesta semana: ${fmtMoeda(disponivelSemana)}
                 </div>
 
                 <div class="alert-box" id="aviso-vencimento-hoje" style="display:none;"></div>
@@ -268,11 +268,11 @@
         div.innerHTML = `
             <div>
                 ${renderHeaderMesFixo()}
-                <label>Recebeu do quê?</label>
+                <label>Recebeu de quê?</label>
                 <input type="text" id="desc-rec" placeholder="Ex: Salário, Aposentadoria...">
                 <label>Valor recebido (R$)</label>
                 <input type="number" step="0.01" id="val-rec" placeholder="0,00">
-                <label>Data recebimento</label>
+                <label>Data de recebimento</label>
                 <input type="date" id="data-rec" max="${hojeIso()}" value="${hojeIso()}">
                 
                 <div class="form-actions">
@@ -343,8 +343,8 @@
                 <input type="text" id="desc-desp" placeholder="Ex: Mercado, Padaria...">
                 <label>Forma de pagamento</label>
                 <select id="forma-pagamento-desp">
-                    <option value="Cartao de Credito">Cartão de Crédito</option>
-                    <option value="Cartao de Debito">Cartão de Débito</option>
+                    <option value="Cartão de Crédito">Cartão de Crédito</option>
+                    <option value="Cartão de Débito">Cartão de Débito</option>
                     <option value="Pix">Pix</option>
                     <option value="Dinheiro">Dinheiro</option>
                 </select>
@@ -357,7 +357,7 @@
                 </div>
 
                 <hr style="margin: 20px 0;">
-                <h3 style="margin-bottom: 12px;">Gastos desse mes:</h3>
+                <h3 style="margin-bottom: 12px;">Gastos deste mês:</h3>
                 <div style="max-height: 28vh; overflow-y: auto;">
                     ${htmlDespesas || '<p style="color:#777">Nenhum gasto cadastrado neste mês.</p>'}
                 </div>
@@ -766,7 +766,7 @@
         modal.innerHTML = `
             <div class="card" style="width:100%; max-width:400px; background:white;">
                 <h3>Como deseja compartilhar?</h3>
-                <p style="margin: 12px 0; color:#666; font-size:15px;">Escolha o formato para enviar via WhatsApp ou outro app:</p>
+                <p style="margin: 12px 0; color:#666; font-size:15px;">Escolha o formato para enviar via WhatsApp ou outro aplicativo:</p>
                 <button class="btn-primary" onclick="exportarTextoWhatsApp(); document.body.lastChild.remove();">Mensagem de Texto (WhatsApp)</button>
                 <button class="btn-secondary" onclick="exportarExcelCsv(); document.body.lastChild.remove();">Planilha Excel (.CSV)</button>
                 <button class="fab-back" style="width:100%; margin-top:12px; justify-content:center; text-align:center;" onclick="this.parentElement.parentElement.remove()">Cancelar</button>
