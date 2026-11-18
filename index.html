@@ -64,6 +64,7 @@
         data: loadData(),
         summaryType: 'mes',
         successMessage: 'salvo',
+        successArticle: 'o',
         successReturnScreen: 'home',
         activeContaParaPagar: null,
         gastoDetalhesAberto: false
@@ -141,65 +142,138 @@
         );
     }
 
-    function calcularDadosSemanaCorrente() {
+    function calcularDadosBannerHome() {
         const [ano, mes] = state.selectedYearMonth.split('-').map(Number);
-        const diasNoMes = new Date(ano, mes, 0).getDate();
-
-        const recebido = arredondar(
-            state.data.receitas
-                .filter(r => r.dataIso && r.dataIso.startsWith(state.selectedYearMonth))
-                .reduce((acc, r) => acc + (parseFloat(r.valor) || 0), 0)
-        );
-
         const hoje = new Date();
         const anoAtual = hoje.getFullYear();
         const mesAtual = hoje.getMonth() + 1;
-        
-        let diasRestantesNoMes = diasNoMes;
-        if (ano === anoAtual && mes === mesAtual) {
-            const diaHoje = hoje.getDate();
-            diasRestantesNoMes = Math.max(1, (diasNoMes - diaHoje) + 1);
-        }
 
-        const dFim = (ano === anoAtual && mes === mesAtual) ? new Date(hoje) : new Date(ano, mes - 1, diasNoMes);
-        const diaSemanaHoje = dFim.getDay();
-        const diasAteDomingo = diaSemanaHoje === 0 ? 1 : (7 - diaSemanaHoje + 1);
-        const diasProjecaoSemana = Math.min(diasAteDomingo, diasRestantesNoMes);
-
-        const dInicioSemana = new Date(dFim);
-        dInicioSemana.setDate(dFim.getDate() - (diaSemanaHoje === 0 ? 6 : diaSemanaHoje - 1));
-        const inicioStr = dInicioSemana.toISOString().slice(0, 10);
-        const fimStr = dFim.toISOString().slice(0, 10);
-
-        const gastoSemanaAtual = arredondar(
-            state.data.despesas
-                .filter(d => !d.contaFixaId && d.dataIso && d.dataIso >= inicioStr && d.dataIso <= fimStr)
-                .reduce((acc, d) => acc + (parseFloat(d.valor) || 0), 0)
-        );
-
-        const contasFixasTotal = obterTotalContasFixasMes(state.selectedYearMonth);
-
-        const baseCalculo = Math.max(0, recebido - contasFixasTotal);
-        const disponivelSemana = arredondar(((baseCalculo / diasRestantesNoMes) * diasProjecaoSemana) - gastoSemanaAtual);
-
-        const valorBaseSemanal = diasProjecaoSemana > 0 ? (baseCalculo / diasRestantesNoMes) * diasProjecaoSemana : 1;
-        const proporcao = valorBaseSemanal > 0 ? (disponivelSemana / valorBaseSemanal) : 0;
+        const isMesPassado = (ano < anoAtual) || (ano === anoAtual && mes < mesAtual);
+        const isMesFuturo = (ano > anoAtual) || (ano === anoAtual && mes > mesAtual);
 
         let corBanner = '#E8F5E9';
         let corTexto = '#1B5E20';
         let bordaBanner = '#2E7D32';
 
-        if (proporcao < 0.10) {
-            corBanner = '#FFEBEE';
-            corTexto = '#B71C1C';
-            bordaBanner = '#C62828';
-        } else if (proporcao >= 0.10 && proporcao <= 0.30) {
-            corBanner = '#FFF8E1';
-            corTexto = '#E65100';
-            bordaBanner = '#F57F17';
-        }
+        if (isMesPassado) {
+            const recebido = arredondar(
+                state.data.receitas
+                    .filter(r => r.dataIso && r.dataIso.startsWith(state.selectedYearMonth))
+                    .reduce((acc, r) => acc + (parseFloat(r.valor) || 0), 0)
+            );
 
-        return { disponivelSemana: isNaN(disponivelSemana) ? 0 : disponivelSemana, corBanner, corTexto, bordaBanner };
+            const avulsas = arredondar(
+                state.data.despesas
+                    .filter(d => d.dataIso && d.dataIso.startsWith(state.selectedYearMonth))
+                    .reduce((acc, d) => acc + (parseFloat(d.valor) || 0), 0)
+            );
+
+            let totalContasMes = 0;
+            state.data.contasFixas.forEach(c => {
+                const inicioOk = c.mesInicioIso <= state.selectedYearMonth;
+                const fimOk = !c.mesFimIso || c.mesFimIso >= state.selectedYearMonth;
+                if (!inicioOk || !fimOk) return;
+
+                const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
+                if (pagamentoInfo !== undefined && pagamentoInfo.valor !== undefined) {
+                    totalContasMes += parseFloat(pagamentoInfo.valor) || 0;
+                } else {
+                    totalContasMes += parseFloat(c.valorMedio) || 0;
+                }
+            });
+
+            const resto = arredondar(recebido - (avulsas + totalContasMes));
+            
+            if (resto < 0) {
+                corBanner = '#FFEBEE';
+                corTexto = '#B71C1C';
+                bordaBanner = '#C62828';
+            }
+
+            return {
+                textoBanner: `Valor que sobrou para guardar: ${fmtMoeda(resto)}`,
+                corBanner, corTexto, bordaBanner
+            };
+        } else if (isMesFuturo) {
+            const recebido = arredondar(
+                state.data.receitas
+                    .filter(r => r.dataIso && r.dataIso.startsWith(state.selectedYearMonth))
+                    .reduce((acc, r) => acc + (parseFloat(r.valor) || 0), 0)
+            );
+
+            const avulsas = arredondar(
+                state.data.despesas
+                    .filter(d => d.dataIso && d.dataIso.startsWith(state.selectedYearMonth))
+                    .reduce((acc, d) => acc + (parseFloat(d.valor) || 0), 0)
+            );
+
+            const contasFixasTotal = obterTotalContasFixasMes(state.selectedYearMonth);
+            const disponivelFuturo = arredondar(recebido - (contasFixasTotal + avulsas));
+
+            if (disponivelFuturo < 0) {
+                corBanner = '#FFEBEE';
+                corTexto = '#B71C1C';
+                bordaBanner = '#C62828';
+            }
+
+            return {
+                textoBanner: `Valor disponível: ${fmtMoeda(disponivelFuturo)}`,
+                corBanner, corTexto, bordaBanner
+            };
+        } else {
+            const diasNoMes = new Date(ano, mes, 0).getDate();
+
+            const recebido = arredondar(
+                state.data.receitas
+                    .filter(r => r.dataIso && r.dataIso.startsWith(state.selectedYearMonth))
+                    .reduce((acc, r) => acc + (parseFloat(r.valor) || 0), 0)
+            );
+
+            const diaHoje = hoje.getDate();
+            const diasRestantesNoMes = Math.max(1, (diasNoMes - diaHoje) + 1);
+
+            const dFim = new Date(hoje);
+            const diaSemanaHoje = dFim.getDay();
+            const diasAteDomingo = diaSemanaHoje === 0 ? 1 : (7 - diaSemanaHoje + 1);
+            
+            const diasProjecaoSemana = Math.min(diasAteDomingo, diasRestantesNoMes);
+            const diaLimiteCalculado = Math.min(diasNoMes, diaHoje + diasProjecaoSemana - 1);
+
+            const dInicioSemana = new Date(dFim);
+            dInicioSemana.setDate(dFim.getDate() - (diaSemanaHoje === 0 ? 6 : diaSemanaHoje - 1));
+            const inicioStr = dInicioSemana.toISOString().slice(0, 10);
+            const fimStr = new Date(ano, mes - 1, diaLimiteCalculado).toISOString().slice(0, 10);
+
+            const gastoPeriodo = arredondar(
+                state.data.despesas
+                    .filter(d => !d.contaFixaId && d.dataIso && d.dataIso >= inicioStr && d.dataIso <= fimStr)
+                    .reduce((acc, d) => acc + (parseFloat(d.valor) || 0), 0)
+            );
+
+            const contasFixasTotal = obterTotalContasFixasMes(state.selectedYearMonth);
+
+            const baseCalculo = Math.max(0, recebido - contasFixasTotal);
+            const disponivelPeriodo = arredondar(((baseCalculo / diasRestantesNoMes) * diasProjecaoSemana) - gastoPeriodo);
+
+            const valorBaseSemanal = diasProjecaoSemana > 0 ? (baseCalculo / diasRestantesNoMes) * diasProjecaoSemana : 1;
+            const proporcao = valorBaseSemanal > 0 ? (disponivelPeriodo / valorBaseSemanal) : 0;
+
+            if (disponivelPeriodo < 0 || proporcao < 0.10) {
+                corBanner = '#FFEBEE';
+                corTexto = '#B71C1C';
+                bordaBanner = '#C62828';
+            } else if (proporcao >= 0.10 && proporcao <= 0.30) {
+                corBanner = '#FFF8E1';
+                corTexto = '#E65100';
+                bordaBanner = '#F57F17';
+            }
+
+            const dispFinal = isNaN(disponivelPeriodo) ? 0 : disponivelPeriodo;
+            return {
+                textoBanner: `Disponível até dia ${diaLimiteCalculado}: ${fmtMoeda(dispFinal)}`,
+                corBanner, corTexto, bordaBanner
+            };
+        }
     }
 
     function render() {
@@ -223,7 +297,7 @@
     function renderHome() {
         const div = document.createElement('div');
         const nomeMesFormatado = formatarNomeMes(state.selectedYearMonth);
-        const { disponivelSemana, corBanner, corTexto, bordaBanner } = calcularDadosSemanaCorrente();
+        const { textoBanner, corBanner, corTexto, bordaBanner } = calcularDadosBannerHome();
 
         div.innerHTML = `
             <div>
@@ -234,17 +308,17 @@
                 </div>
 
                 <div class="banner-semana" style="background-color: ${corBanner}; color: ${corTexto}; border: 2px solid ${bordaBanner};">
-                    Disponível até domingo: ${fmtMoeda(disponivelSemana)}
+                    ${textoBanner}
                 </div>
 
                 <div class="alert-box" id="aviso-vencimento-hoje" style="display:none;"></div>
 
                 <div class="grid-2x2">
                     <button class="big-btn btn-recebido" onclick="navegar('rec')">Valor<br>Recebido</button>
-                    <button class="big-btn btn-gasto" onclick="navegar('desp')">Valor<br>Gasto</button>
+                    <button class="big-btn btn-gasto" onclick="navegar('desp')">Outros<br>Gastos</button>
                 </div>
                 <div class="grid-2x2">
-                    <button class="big-btn btn-restante" onclick="navegar('period')">Resumo</button>
+                    <button class="big-btn btn-restante" onclick="clicarBotaoResumo()">Resumo</button>
                     <button class="big-btn btn-contas" onclick="navegar('conta')">Contas<br>Fixas</button>
                 </div>
             </div>
@@ -258,6 +332,23 @@
             <input type="file" id="input-json-file" accept=".json" style="display:none;" onchange="processarRestauracaoJson(event)">
         `;
         return div;
+    }
+
+    function clicarBotaoResumo() {
+        const [ano, mes] = state.selectedYearMonth.split('-').map(Number);
+        const hoje = new Date();
+        const anoAtual = hoje.getFullYear();
+        const mesAtual = hoje.getMonth() + 1;
+
+        const isMesAtual = (ano === anoAtual && mes === mesAtual);
+
+        if (isMesAtual) {
+            navegar('period');
+        } else {
+            state.summaryType = 'mes';
+            state.gastoDetalhesAberto = false;
+            navegar('summary');
+        }
     }
 
     function mudarMes(delta) {
@@ -297,7 +388,7 @@
                 <label>Valor recebido (R$)</label>
                 <input type="number" step="0.01" id="val-rec" placeholder="0,00">
                 <label>Data de recebimento</label>
-                <input type="date" id="data-rec" max="${hojeIso()}" value="${hojeIso()}">
+                <input type="date" id="data-rec" max="${hojeIso()}" value="${hojeIso()}" onchange="validarDataInput(this)">
                 
                 <div class="form-actions">
                     <button class="fab-back" style="margin:0;" onclick="navegar('home')">← Voltar</button>
@@ -315,6 +406,13 @@
         return div;
     }
 
+    function validarDataInput(input) {
+        if (input.value > hojeIso()) {
+            alert('Não é permitido selecionar uma data no futuro!');
+            input.value = hojeIso();
+        }
+    }
+
     function salvarReceita() {
         const desc = document.getElementById('desc-rec').value.trim();
         const val = parseFloat(document.getElementById('val-rec').value.replace(',', '.'));
@@ -327,6 +425,7 @@
         saveData();
         state.currentScreen = 'success';
         state.successMessage = 'recebimento';
+        state.successArticle = 'o';
         state.successReturnScreen = 'rec';
         render();
     }
@@ -373,7 +472,7 @@
                     <option value="Dinheiro">Dinheiro</option>
                 </select>
                 <label>Data</label>
-                <input type="date" id="data-desp" max="${hojeIso()}" value="${hojeIso()}">
+                <input type="date" id="data-desp" max="${hojeIso()}" value="${hojeIso()}" onchange="validarDataInput(this)">
                 
                 <div class="form-actions">
                     <button class="fab-back" style="margin:0;" onclick="navegar('home')">← Voltar</button>
@@ -381,7 +480,7 @@
                 </div>
 
                 <hr style="margin: 20px 0;">
-                <h3 style="margin-bottom: 12px;">Gastos deste mês:</h3>
+                <h3 style="margin-bottom: 12px;">Outros Gastos deste mês:</h3>
                 <div style="max-height: 28vh; overflow-y: auto;">
                     ${htmlDespesas || '<p style="color:#777">Nenhum gasto cadastrado neste mês.</p>'}
                 </div>
@@ -410,6 +509,7 @@
         saveData();
         state.currentScreen = 'success';
         state.successMessage = 'gasto';
+        state.successArticle = 'o';
         state.successReturnScreen = 'desp';
         render();
     }
@@ -440,9 +540,12 @@
                 ? `<span style="color: #2E7D32; font-weight: bold;">🟢 Paga</span> - <span style="color: #000; font-weight:bold;">${fmtMoeda(pagamentoInfo.valor)}</span>`
                 : `<span style="color: #C62828; font-weight: bold;">🔴 Pendente</span> - <span style="color: #000; font-weight:bold;">${fmtMoeda(c.valorMedio)}</span>`;
 
-            const botaoPagueiHtml = !estaPaga 
-                ? `<button class="btn-success-small" style="width: auto; padding: 8px 12px; font-size: 14px; height: auto;" onclick="pedirBaixaConta('${c.id}')">Paguei</button>`
-                : '';
+            const botoesAcao = estaPaga 
+                ? `<button class="btn-secondary" style="width: auto; padding: 6px 10px; font-size: 13px; height: auto; border-color:#2E7D32; color:#2E7D32;" onclick="pedirBaixaConta('${c.id}')">Alterar Valor</button>`
+                : `
+                    <button class="btn-success-small" style="width: auto; padding: 8px 12px; font-size: 14px; height: auto;" onclick="pedirBaixaConta('${c.id}')">Paguei</button>
+                    <button class="btn-danger" style="width: auto; padding: 8px 12px; font-size: 14px; height: auto;" onclick="excluirContaFixa('${c.id}')">Excluir</button>
+                `;
 
             htmlContas += `
                 <div class="list-item">
@@ -451,8 +554,7 @@
                         ${statusHtml}
                     </div>
                     <div style="display: flex; gap: 6px; align-items: center;">
-                        ${botaoPagueiHtml}
-                        <button class="btn-danger" style="width: auto; padding: 8px 12px; font-size: 14px; height: auto;" onclick="excluirContaFixa('${c.id}')">Excluir</button>
+                        ${botoesAcao}
                     </div>
                 </div>
             `;
@@ -509,6 +611,7 @@
         saveData();
         state.currentScreen = 'success';
         state.successMessage = 'conta';
+        state.successArticle = 'a';
         state.successReturnScreen = 'conta';
         render();
     }
@@ -537,15 +640,26 @@
 
     function renderConfirmPagamento() {
         const c = state.activeContaParaPagar;
+        const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
+        const valorAtual = pagamentoInfo !== undefined ? pagamentoInfo.valor : c.valorMedio;
+        const dataAtual = pagamentoInfo !== undefined ? pagamentoInfo.dataIso : hojeIso();
+        const jaPaga = pagamentoInfo !== undefined;
+
+        const tituloTela = jaPaga ? `Alterar valor pago: ${c.descricao}` : `Pagar conta: ${c.descricao}`;
+        const inputDataHtml = jaPaga 
+            ? `<input type="date" value="${dataAtual}" disabled style="background:#eee; color:#666; margin-bottom:20px;" />` 
+            : `<input type="date" id="data-real-pago" max="${hojeIso()}" value="${dataAtual}" onchange="validarDataInput(this)">`;
+
         const div = document.createElement('div');
         div.innerHTML = `
             <div>
                 ${renderHeaderMesFixo()}
-                <h2>Pagar conta: ${c.descricao}</h2>
-                <label style="margin-top:20px;">Confirme ou ajuste o valor real pago:</label>
-                <input type="number" step="0.01" id="val-real-pago" value="${c.valorMedio}">
+                <h2>${tituloTela}</h2>
+                <label style="margin-top:20px;">Valor real pago (R$):</label>
+                <input type="number" step="0.01" id="val-real-pago" value="${valorAtual}">
+                
                 <label>Data do pagamento</label>
-                <input type="date" id="data-real-pago" max="${hojeIso()}" value="${hojeIso()}">
+                ${inputDataHtml}
                 
                 <div class="form-actions">
                     <button class="fab-back" style="margin:0;" onclick="navegar('conta')">← Voltar</button>
@@ -559,10 +673,11 @@
 
     function confirmarPagamentoReal() {
         const valReal = parseFloat(document.getElementById("val-real-pago").value.replace(',', '.'));
-        const dataReal = document.getElementById("data-real-pago").value;
+        const elData = document.getElementById("data-real-pago");
+        const dataReal = elData ? elData.value : (state.data.pagamentosContas[`${state.activeContaParaPagar.id}_${state.selectedYearMonth}`]?.dataIso || hojeIso());
         
         if (isNaN(valReal) || valReal <= 0 || !dataReal) { alert('Preencha os campos corretamente!'); return; }
-        if (dataReal > hojeIso()) { alert('Não é permitido registrar pagamentos com data no futuro!'); return; }
+        if (elData && dataReal > hojeIso()) { alert('Não é permitido registrar pagamentos com data no futuro!'); return; }
 
         const c = state.activeContaParaPagar;
 
@@ -571,6 +686,7 @@
         saveData();
         state.currentScreen = 'success';
         state.successMessage = 'pagamento';
+        state.successArticle = 'o';
         state.successReturnScreen = 'conta';
         render();
     }
@@ -728,6 +844,11 @@
         const cursorGasto = state.summaryType === 'mes' ? 'cursor: pointer;' : '';
         const dicaClique = state.summaryType === 'mes' ? `<div style="font-size: 12px; font-weight: normal; color: #666; margin-top: 4px;">(Toque para ${state.gastoDetalhesAberto ? 'recolher' : 'ver detalhes'})</div>` : '';
 
+        const [ano, mes] = state.selectedYearMonth.split('-').map(Number);
+        const hoje = new Date();
+        const isMesAtual = (ano === hoje.getFullYear() && mes === hoje.getMonth() + 1);
+        const acaoVoltar = isMesAtual ? "navegar('period')" : "navegar('home')";
+
         div.innerHTML = `
             <div>
                 ${renderHeaderMesFixo()}
@@ -752,7 +873,7 @@
                 </div>
 
                 <div style="margin-top: 24px;">
-                    <button class="fab-back" onclick="navegar('period')">← Voltar</button>
+                    <button class="fab-back" onclick="${acaoVoltar}">← Voltar</button>
                 </div>
             </div>
             <div></div>
@@ -762,11 +883,14 @@
 
     function renderSuccess() {
         const div = document.createElement('div');
+        const artigo = state.successArticle || 'o';
+        const textoSucesso = artigo === 'a' ? `Sua ${state.successMessage} foi salva` : `Seu ${state.successMessage} foi salvo`;
+
         div.innerHTML = `
             <div style="display: flex; flex-direction: column; justify-content: space-between; min-height: 88vh;">
                 <div style="flex-grow:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;">
                     <div class="check-circle">✓</div>
-                    <h2>Seu ${state.successMessage} foi salvo</h2>
+                    <h2>${textoSucesso}</h2>
                 </div>
                 <div style="margin-top: 20px;">
                     <button class="fab-back" onclick="navegar(state.successReturnScreen)">← Voltar</button>
