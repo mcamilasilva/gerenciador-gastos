@@ -21,7 +21,7 @@ body { background: #090d16; color: #ffffff; padding: 16px; display: flex; justif
 .fab-settings { position: fixed; bottom: 24px; right: 24px; width: 68px; height: 68px; background: #334155; color: white; border: 3px solid #94a3b8; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 32px; cursor: pointer; box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 999; }
 .fab-settings:active { transform: scale(0.95); }
 
-.month-selector { display: flex; justify-content: space-between; align-items: center; background: rgba(30, 41, 59, 0.4); border: 1px solid #334155; border-radius: 16px; padding: 8px 14px; margin-top: 24px; box-shadow: none; }
+.month-selector { display: flex; justify-content: space-between; align-items: center; background: rgba(30, 41, 59, 0.4); border: 1px solid #334155; border-radius: 16px; padding: 8px 14px; margin-top: 24px; }
 .month-btn { background: #1e293b; border: 1px solid #475569; color: #94a3b8; font-size: 14px; font-weight: normal; cursor: pointer; padding: 6px 12px; border-radius: 10px; transition: background 0.2s; }
 .month-btn:hover:not(:disabled) { background: #334155; color: #ffffff; }
 .month-title { font-size: 16px !important; font-weight: bold; color: #cbd5e1 !important; text-align: center; }
@@ -42,7 +42,9 @@ label { font-size: 20px; font-weight: bold; display: block; text-align: left; co
 
 .alert-box { background: #fef3c7; border: 2px solid #f59e0b; padding: 16px; border-radius: 16px; font-size: 17px; color: #78350f; font-weight: bold; margin-bottom: 16px; box-shadow: 0 6px 16px rgba(0,0,0,0.1); }
 .list-item { display: flex; justify-content: space-between; align-items: center; padding: 18px; border: 2px solid #cbd5e1; border-radius: 16px; margin-bottom: 12px; background: #ffffff; color: #111827; box-shadow: 0 4px 12px rgba(0,0,0,0.06); font-size: 17px; }
-.header-mes-fixo { background: linear-gradient(135deg, #065f46 0%, #047857 100%); border: 3px solid #34d399; color: #ffffff; padding: 16px; border-radius: 18px; text-align: center; font-weight: bold; font-size: 20px; margin-bottom: 16px; box-shadow: 0 6px 16px rgba(0,0,0,0.2); }
+
+.header-mes-sutil { background: #1e293b; border: 2px solid #475569; color: #f1f5f9; padding: 14px 18px; border-radius: 16px; display: flex; align-items: center; justify-content: space-between; font-weight: bold; font-size: 18px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+.header-mes-sutil span { color: #38bdf8; font-weight: 800; }
 
 .banner-semana { border-radius: 20px; padding: 22px; text-align: center; font-weight: 800; font-size: 18px; margin-bottom: 32px; box-shadow: 0 10px 24px rgba(0,0,0,0.15); line-height: 1.4; }
 .badge-visualizacao { background: #334155; color: #f8fafc; padding: 16px; border-radius: 16px; text-align: center; font-size: 17px; font-weight: bold; margin-bottom: 16px; border: 2px solid #64748b; }
