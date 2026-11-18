@@ -1,0 +1,16 @@
+{
+  "name": "Meus Gastos",
+  "short_name": "Gastos",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#FAFAFA",
+  "theme_color": "#1B5E20",
+  "icons": [
+    {
+      "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='105' fill='%231B5E20'/><text x='50%' y='54%' font-size='260' font-family='Arial, sans-serif' font-weight='bold' fill='%23FFFFFF' text-anchor='middle' dominant-baseline='central'>R$</text></svg>",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
