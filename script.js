@@ -1,4 +1,4 @@
-const GOOGLE_DRIVE_BACKUP_URL = 'https://script.google.com/macros/s/AKfycbxs7maPNu4MmeeCvDXlG3ZRk9wY99jQ9P4-LlRK5faTNIgli6fmtlT26ZMmELSo5N7f4w/exec';
+const GOOGLE_DRIVE_BACKUP_URL = 'https://script.google.com/macros/s/AKfycbz8tJUXmGfMKRAYpu0JX0bmHZfwjOoO-h-y-SA3G2o9DYNJKzSlK5uXGNOpxkktbNoqDQ/exec';
 let backupDriveEmAndamento = false;
 
 let state = {
