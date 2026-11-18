@@ -65,30 +65,31 @@
         summaryType: 'mes',
         successMessage: 'salvo',
         successReturnScreen: 'home',
-        activeContaParaPagar: null
+        activeContaParaPagar: null,
+        gastoDetalhesAberto: false
     };
 
     function loadData() {
         const saved = localStorage.getItem('meus_gastos_data');
-        if (saved) return JSON.parse(saved);
+        if (saved) {
+            try {
+                const parsed = JSON.parse(saved);
+                return {
+                    receitas: Array.isArray(parsed.receitas) ? parsed.receitas : [],
+                    despesas: Array.isArray(parsed.despesas) ? parsed.despesas : [],
+                    contasFixas: Array.isArray(parsed.contasFixas) ? parsed.contasFixas : [],
+                    pagamentosContas: (parsed.pagamentosContas && typeof parsed.pagamentosContas === 'object') ? parsed.pagamentosContas : {}
+                };
+            } catch (e) {}
+        }
         return { receitas: [], despesas: [], contasFixas: [], pagamentosContas: {} };
     }
 
     function saveData() {
         localStorage.setItem('meus_gastos_data', JSON.stringify(state.data));
-        verificarBackupDiario();
     }
 
-    function verificarBackupDiario() {
-        const hojeStr = new Date().toISOString().slice(0, 10);
-        const ultimoBackup = localStorage.getItem('meus_gastos_ultimo_backup');
-        if (ultimoBackup !== hojeStr) {
-            fazerBackupAutomaticoJson();
-            localStorage.setItem('meus_gastos_ultimo_backup', hojeStr);
-        }
-    }
-
-    function fazerBackupAutomaticoJson() {
+    function baixarBackupManualJson() {
         try {
             const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(state.data, null, 2));
             const downloadAnchor = document.createElement('a');
@@ -97,11 +98,16 @@
             document.body.appendChild(downloadAnchor);
             downloadAnchor.click();
             downloadAnchor.remove();
-        } catch (e) {}
+        } catch (e) {
+            alert('Não foi possível gerar o arquivo de backup.');
+        }
     }
 
-    const fmtMoeda = (val) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
-    const arredondar = (val) => Math.round((val + Number.EPSILON) * 100) / 100;
+    const fmtMoeda = (val) => {
+        const num = parseFloat(val);
+        return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(isNaN(num) ? 0 : num);
+    };
+    const arredondar = (val) => Math.round(((isNaN(val) ? 0 : val) + Number.EPSILON) * 100) / 100;
     const hojeIso = () => new Date().toISOString().slice(0, 10);
 
     function formatarNomeMes(yearMonth) {
@@ -112,7 +118,27 @@
     }
 
     function renderHeaderMesFixo() {
-        return `<div class="header-mes-fixo">${formatarNomeMes(state.selectedYearMonth)}</div>`;
+        return `
+            <div style="margin-bottom: 16px;">
+                <div class="header-mes-fixo" style="margin-bottom: 4px;">${formatarNomeMes(state.selectedYearMonth)}</div>
+            </div>
+        `;
+    }
+
+    function obterTotalContasFixasMes(anoMes) {
+        return arredondar(
+            state.data.contasFixas.reduce((acc, c) => {
+                const inicioOk = c.mesInicioIso <= anoMes;
+                const fimOk = !c.mesFimIso || c.mesFimIso >= anoMes;
+                if (!inicioOk || !fimOk) return acc;
+
+                const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${anoMes}`];
+                if (pagamentoInfo !== undefined && pagamentoInfo.valor !== undefined) {
+                    return acc + (parseFloat(pagamentoInfo.valor) || 0);
+                }
+                return acc + (parseFloat(c.valorMedio) || 0);
+            }, 0)
+        );
     }
 
     function calcularDadosSemanaCorrente() {
@@ -121,28 +147,9 @@
 
         const recebido = arredondar(
             state.data.receitas
-                .filter(r => r.dataIso.startsWith(state.selectedYearMonth))
-                .reduce((acc, r) => acc + r.valor, 0)
+                .filter(r => r.dataIso && r.dataIso.startsWith(state.selectedYearMonth))
+                .reduce((acc, r) => acc + (parseFloat(r.valor) || 0), 0)
         );
-
-        const contasFixasTotal = arredondar(
-            state.data.contasFixas.reduce((acc, c) => {
-                const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
-                if (pagamentoInfo !== undefined) return acc + pagamentoInfo.valor;
-                const inicioOk = c.mesInicioIso <= state.selectedYearMonth;
-                const fimOk = !c.mesFimIso || c.mesFimIso >= state.selectedYearMonth;
-                return (inicioOk && fimOk) ? acc + c.valorMedio : acc;
-            }, 0)
-        );
-
-        const avulsas = arredondar(
-            state.data.despesas
-                .filter(d => !d.contaFixaId && d.dataIso.startsWith(state.selectedYearMonth))
-                .reduce((acc, d) => acc + d.valor, 0)
-        );
-
-        const gastoTotal = arredondar(contasFixasTotal + avulsas);
-        const restanteMes = arredondar(recebido - gastoTotal);
 
         const hoje = new Date();
         const anoAtual = hoje.getFullYear();
@@ -154,11 +161,28 @@
             diasRestantesNoMes = Math.max(1, (diasNoMes - diaHoje) + 1);
         }
 
-        const diasProjecao = Math.min(7, diasRestantesNoMes);
-        const saldoLivre = Math.max(0, restanteMes);
-        const disponivelSemana = arredondar((saldoLivre / diasRestantesNoMes) * diasProjecao);
-        
-        const valorBaseSemanal = diasProjecao > 0 ? (recebido / diasNoMes) * diasProjecao : 1;
+        const dFim = (ano === anoAtual && mes === mesAtual) ? new Date(hoje) : new Date(ano, mes - 1, diasNoMes);
+        const diaSemanaHoje = dFim.getDay();
+        const diasAteDomingo = diaSemanaHoje === 0 ? 1 : (7 - diaSemanaHoje + 1);
+        const diasProjecaoSemana = Math.min(diasAteDomingo, diasRestantesNoMes);
+
+        const dInicioSemana = new Date(dFim);
+        dInicioSemana.setDate(dFim.getDate() - (diaSemanaHoje === 0 ? 6 : diaSemanaHoje - 1));
+        const inicioStr = dInicioSemana.toISOString().slice(0, 10);
+        const fimStr = dFim.toISOString().slice(0, 10);
+
+        const gastoSemanaAtual = arredondar(
+            state.data.despesas
+                .filter(d => !d.contaFixaId && d.dataIso && d.dataIso >= inicioStr && d.dataIso <= fimStr)
+                .reduce((acc, d) => acc + (parseFloat(d.valor) || 0), 0)
+        );
+
+        const contasFixasTotal = obterTotalContasFixasMes(state.selectedYearMonth);
+
+        const baseCalculo = Math.max(0, recebido - contasFixasTotal);
+        const disponivelSemana = arredondar(((baseCalculo / diasRestantesNoMes) * diasProjecaoSemana) - gastoSemanaAtual);
+
+        const valorBaseSemanal = diasProjecaoSemana > 0 ? (baseCalculo / diasRestantesNoMes) * diasProjecaoSemana : 1;
         const proporcao = valorBaseSemanal > 0 ? (disponivelSemana / valorBaseSemanal) : 0;
 
         let corBanner = '#E8F5E9';
@@ -175,7 +199,7 @@
             bordaBanner = '#F57F17';
         }
 
-        return { disponivelSemana, corBanner, corTexto, bordaBanner };
+        return { disponivelSemana: isNaN(disponivelSemana) ? 0 : disponivelSemana, corBanner, corTexto, bordaBanner };
     }
 
     function render() {
@@ -210,7 +234,7 @@
                 </div>
 
                 <div class="banner-semana" style="background-color: ${corBanner}; color: ${corTexto}; border: 2px solid ${bordaBanner};">
-                    Disponível para gastar nesta semana: ${fmtMoeda(disponivelSemana)}
+                    Disponível até domingo: ${fmtMoeda(disponivelSemana)}
                 </div>
 
                 <div class="alert-box" id="aviso-vencimento-hoje" style="display:none;"></div>
@@ -251,9 +275,9 @@
         const div = document.createElement('div');
         let htmlReceitas = '';
         
-        const receitasMes = state.data.receitas.filter(r => r.dataIso.startsWith(state.selectedYearMonth));
+        const recebidasMes = state.data.receitas.filter(r => r.dataIso && r.dataIso.startsWith(state.selectedYearMonth));
 
-        receitasMes.forEach(r => {
+        recebidasMes.forEach(r => {
             htmlReceitas += `
                 <div class="list-item">
                     <div style="flex-grow: 1;">
@@ -319,7 +343,7 @@
         const div = document.createElement('div');
         let htmlDespesas = '';
         
-        const despesasMes = state.data.despesas.filter(d => !d.contaFixaId && d.dataIso.startsWith(state.selectedYearMonth));
+        const despesasMes = state.data.despesas.filter(d => !d.contaFixaId && d.dataIso && d.dataIso.startsWith(state.selectedYearMonth));
 
         despesasMes.forEach(d => {
             const formaPgtoTxt = d.formaPagamento ? ` • ${d.formaPagamento}` : '';
@@ -420,10 +444,6 @@
                 ? `<button class="btn-success-small" style="width: auto; padding: 8px 12px; font-size: 14px; height: auto;" onclick="pedirBaixaConta('${c.id}')">Paguei</button>`
                 : '';
 
-            const botaoExcluirHtml = !estaPaga
-                ? `<button class="btn-danger" style="width: auto; padding: 8px 12px; font-size: 14px; height: auto;" onclick="excluirContaFixa('${c.id}')">Excluir</button>`
-                : '';
-
             htmlContas += `
                 <div class="list-item">
                     <div style="flex-grow: 1;">
@@ -432,7 +452,7 @@
                     </div>
                     <div style="display: flex; gap: 6px; align-items: center;">
                         ${botaoPagueiHtml}
-                        ${botaoExcluirHtml}
+                        <button class="btn-danger" style="width: auto; padding: 8px 12px; font-size: 14px; height: auto;" onclick="excluirContaFixa('${c.id}')">Excluir</button>
                     </div>
                 </div>
             `;
@@ -502,6 +522,8 @@
             const dataAnt = new Date(ano, mes - 2, 1);
             conta.mesFimIso = dataAnt.toISOString().slice(0, 7);
 
+            delete state.data.pagamentosContas[`${id}_${state.selectedYearMonth}`];
+
             saveData();
             render();
         }
@@ -536,8 +558,8 @@
     }
 
     function confirmarPagamentoReal() {
-        const valReal = parseFloat(document.getElementById('val-real-pago').value.replace(',', '.'));
-        const dataReal = document.getElementById('data-real-pago').value;
+        const valReal = parseFloat(document.getElementById("val-real-pago").value.replace(',', '.'));
+        const dataReal = document.getElementById("data-real-pago").value;
         
         if (isNaN(valReal) || valReal <= 0 || !dataReal) { alert('Preencha os campos corretamente!'); return; }
         if (dataReal > hojeIso()) { alert('Não é permitido registrar pagamentos com data no futuro!'); return; }
@@ -546,15 +568,6 @@
 
         state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`] = { valor: valReal, dataIso: dataReal };
         
-        state.data.despesas = state.data.despesas.filter(d => !(d.contaFixaId === c.id && d.dataIso.startsWith(state.selectedYearMonth)));
-        state.data.despesas.push({
-            id: crypto.randomUUID(),
-            descricao: `${c.descricao} (Conta Fixa)`,
-            valor: valReal,
-            dataIso: dataReal,
-            contaFixaId: c.id
-        });
-
         saveData();
         state.currentScreen = 'success';
         state.successMessage = 'pagamento';
@@ -567,6 +580,7 @@
         div.innerHTML = `
             <div>
                 ${renderHeaderMesFixo()}
+
                 <h2 style="text-align: center; margin-top: 20px; font-size: 22px;">Você quer saber o resumo na semana ou no mês?</h2>
                 <div style="margin-top: 40px; display: flex; flex-direction: column; gap: 20px;">
                     <button class="big-btn" style="height: 80px; background:#fff; border:2px solid #333;" onclick="escolherPeriodo('semana')">SEMANA</button>
@@ -585,6 +599,7 @@
     function escolherPeriodo(tipo) {
         state.summaryType = tipo;
         state.currentScreen = 'summary';
+        state.gastoDetalhesAberto = false;
         render();
     }
 
@@ -594,40 +609,47 @@
 
         const recebido = arredondar(
             state.data.receitas
-                .filter(r => r.dataIso.startsWith(state.selectedYearMonth))
-                .reduce((acc, r) => acc + r.valor, 0)
-        );
-
-        const contasFixasTotal = arredondar(
-            state.data.contasFixas.reduce((acc, c) => {
-                const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
-                if (pagamentoInfo !== undefined) {
-                    return acc + pagamentoInfo.valor;
-                }
-
-                const inicioOk = c.mesInicioIso <= state.selectedYearMonth;
-                const fimOk = !c.mesFimIso || c.mesFimIso >= state.selectedYearMonth;
-                if (inicioOk && fimOk) {
-                    return acc + c.valorMedio;
-                }
-
-                return acc;
-            }, 0)
+                .filter(r => r.dataIso && r.dataIso.startsWith(state.selectedYearMonth))
+                .reduce((acc, r) => acc + (parseFloat(r.valor) || 0), 0)
         );
 
         const avulsas = arredondar(
             state.data.despesas
-                .filter(d => !d.contaFixaId && d.dataIso.startsWith(state.selectedYearMonth))
-                .reduce((acc, d) => acc + d.valor, 0)
+                .filter(d => d.dataIso && d.dataIso.startsWith(state.selectedYearMonth))
+                .reduce((acc, d) => acc + (parseFloat(d.valor) || 0), 0)
         );
 
-        const gastoTotal = arredondar(contasFixasTotal + avulsas);
-        const restanteMes = arredondar(recebido - gastoTotal);
+        let totalContasPagas = 0;
+        let totalContasPendentes = 0;
+
+        state.data.contasFixas.forEach(c => {
+            const inicioOk = c.mesInicioIso <= state.selectedYearMonth;
+            const fimOk = !c.mesFimIso || c.mesFimIso >= state.selectedYearMonth;
+            if (!inicioOk || !fimOk) return;
+
+            const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
+            if (pagamentoInfo !== undefined && pagamentoInfo.valor !== undefined) {
+                totalContasPagas += parseFloat(pagamentoInfo.valor) || 0;
+            } else {
+                totalContasPendentes += parseFloat(c.valorMedio) || 0;
+            }
+        });
+
+        totalContasPagas = arredondar(totalContasPagas);
+        totalContasPendentes = arredondar(totalContasPendentes);
+
+        const contasFixasTotal = arredondar(totalContasPagas + totalContasPendentes);
+        const gastoTotalGeral = arredondar(contasFixasTotal + avulsas);
+        const restanteMes = arredondar(recebido - gastoTotalGeral);
 
         if (state.summaryType === 'mes') {
+            const valorGastoTotalComContas = arredondar(avulsas + totalContasPagas + totalContasPendentes);
             return {
                 inicial: recebido,
-                gasto: gastoTotal,
+                gastoTotal: valorGastoTotalComContas,
+                contasPagas: totalContasPagas,
+                contasAPagar: totalContasPendentes,
+                outrosGastos: avulsas,
                 restante: restanteMes
             };
         } else {
@@ -641,58 +663,93 @@
                 diasRestantesNoMes = Math.max(1, (diasNoMes - diaHoje) + 1);
             }
 
-            const diasProjecao = Math.min(7, diasRestantesNoMes);
-            const saldoLivre = Math.max(0, restanteMes);
-            
-            const valorDisponivelSemana = arredondar((saldoLivre / diasRestantesNoMes) * diasProjecao);
-            
             const dFim = (ano === anoAtual && mes === mesAtual) ? new Date(hoje) : new Date(ano, mes - 1, diasNoMes);
-            const diaSemana = dFim.getDay();
-            const diffParaSegunda = diaSemana === 0 ? 6 : diaSemana - 1;
+            const diaSemanaHoje = dFim.getDay();
+            const diasAteDomingo = diaSemanaHoje === 0 ? 1 : (7 - diaSemanaHoje + 1);
+            const diasProjecaoSemana = Math.min(diasAteDomingo, diasRestantesNoMes);
             
-            const dInicio = new Date(dFim);
-            dInicio.setDate(dFim.getDate() - diffParaSegunda);
-
-            const inicioStr = dInicio.toISOString().slice(0, 10);
+            const dInicioSemana = new Date(dFim);
+            dInicioSemana.setDate(dFim.getDate() - (diaSemanaHoje === 0 ? 6 : diaSemanaHoje - 1));
+            const inicioStr = dInicioSemana.toISOString().slice(0, 10);
             const fimStr = dFim.toISOString().slice(0, 10);
 
-            const gastoSemana = arredondar(
+            const gastoSemanaAtual = arredondar(
                 state.data.despesas
-                    .filter(d => d.dataIso >= inicioStr && d.dataIso <= fimStr)
-                    .reduce((acc, d) => acc + d.valor, 0)
+                    .filter(d => !d.contaFixaId && d.dataIso && d.dataIso >= inicioStr && d.dataIso <= fimStr)
+                    .reduce((acc, d) => acc + (parseFloat(d.valor) || 0), 0)
             );
 
+            const baseCalculo = Math.max(0, recebido - contasFixasTotal);
+            const valorInicialSemana = arredondar((baseCalculo / diasRestantesNoMes) * diasProjecaoSemana);
+            const valorDisponivelSemana = arredondar(valorInicialSemana - gastoSemanaAtual);
+
             return {
-                inicial: valorDisponivelSemana,
-                gasto: gastoSemana,
-                restante: valorDisponivelSemana
+                inicial: isNaN(valorInicialSemana) ? 0 : valorInicialSemana,
+                gastoTotal: isNaN(gastoSemanaAtual) ? 0 : gastoSemanaAtual,
+                contasPagas: 0,
+                contasAPagar: 0,
+                outrosGastos: isNaN(gastoSemanaAtual) ? 0 : gastoSemanaAtual,
+                restante: isNaN(valorDisponivelSemana) ? 0 : valorDisponivelSemana
             };
+        }
+    }
+
+    function toggleGastoDetalhes() {
+        if (state.summaryType === 'mes') {
+            state.gastoDetalhesAberto = !state.gastoDetalhesAberto;
+            render();
         }
     }
 
     function renderSummary() {
         const res = calcularResumo();
         const div = document.createElement('div');
+        
+        let htmlDetalhesGasto = '';
+        if (state.summaryType === 'mes' && state.gastoDetalhesAberto) {
+            htmlDetalhesGasto = `
+                <div style="margin-top: 10px; padding-left: 12px; border-left: 3px solid #D32F2F; display: flex; flex-direction: column; gap: 8px; text-align: left;">
+                    <div style="display: flex; justify-content: space-between; font-size: 15px; color: #444;">
+                        <span>• Valor contas já pagas:</span>
+                        <strong style="color: #2E7D32;">${fmtMoeda(res.contasPagas)}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; font-size: 15px; color: #444;">
+                        <span>• Valor contas a pagar:</span>
+                        <strong style="color: #E65100;">${fmtMoeda(res.contasAPagar)}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; font-size: 15px; color: #444;">
+                        <span>• Outros Gastos:</span>
+                        <strong style="color: #D32F2F;">${fmtMoeda(res.outrosGastos)}</strong>
+                    </div>
+                </div>
+            `;
+        }
+
+        const cursorGasto = state.summaryType === 'mes' ? 'cursor: pointer;' : '';
+        const dicaClique = state.summaryType === 'mes' ? `<div style="font-size: 12px; font-weight: normal; color: #666; margin-top: 4px;">(Toque para ${state.gastoDetalhesAberto ? 'recolher' : 'ver detalhes'})</div>` : '';
+
         div.innerHTML = `
             <div>
                 ${renderHeaderMesFixo()}
 
                 <div class="summary-box">
-                    <div class="summary-title">${state.summaryType === 'semana' ? 'Disponível para os próximos dias' : 'Valor Restante'}</div>
+                    <div class="summary-title">${state.summaryType === 'semana' ? 'Disponível até domingo' : 'Valor Restante'}</div>
                     <div class="summary-value" style="color: ${res.restante < 0 ? '#B71C1C' : '#1B5E20'}">${fmtMoeda(res.restante)}</div>
                 </div>
 
-                <div class="summary-box">
-                    <div class="summary-title">${state.summaryType === 'semana' ? 'Valor Gasto (nesta semana)' : 'Valor Gasto'}</div>
-                    <div class="summary-value" style="color: #D32F2F; font-weight: normal;">${fmtMoeda(res.gasto)}</div>
+                <div class="summary-box" style="${cursorGasto}" onclick="toggleGastoDetalhes()">
+                    <div class="summary-title">
+                        ${state.summaryType === 'semana' ? 'Valor Gasto (nesta semana)' : 'Valor Gasto'}
+                        ${dicaClique}
+                    </div>
+                    <div class="summary-value" style="color: #D32F2F; font-weight: normal;">${fmtMoeda(res.gastoTotal)}</div>
+                    ${htmlDetalhesGasto}
                 </div>
 
-                ${state.summaryType === 'mes' ? `
-                    <div class="summary-box">
-                        <div class="summary-title">Valor Inicial</div>
-                        <div class="summary-value" style="color: #000; font-weight: normal;">${fmtMoeda(res.inicial)}</div>
-                    </div>
-                ` : ''}
+                <div class="summary-box">
+                    <div class="summary-title">Valor Inicial</div>
+                    <div class="summary-value" style="color: #000; font-weight: normal;">${fmtMoeda(res.inicial)}</div>
+                </div>
 
                 <div style="margin-top: 24px;">
                     <button class="fab-back" onclick="navegar('period')">← Voltar</button>
@@ -721,22 +778,21 @@
 
     function obterItensCronologicos() {
         let itens = [];
-        state.data.receitas.filter(r => r.dataIso.startsWith(state.selectedYearMonth)).forEach(r => {
-            itens.push({ data: r.dataIso, tipo: 'Recebido', desc: r.descricao, valor: r.valor });
+        state.data.receitas.filter(r => r.dataIso && r.dataIso.startsWith(state.selectedYearMonth)).forEach(r => {
+            itens.push({ data: r.dataIso, tipo: 'Recebido', desc: r.descricao, valor: parseFloat(r.valor) || 0 });
         });
-        state.data.despesas.filter(d => d.dataIso.startsWith(state.selectedYearMonth)).forEach(d => {
-            itens.push({ data: d.dataIso, tipo: 'Gasto', desc: d.descricao, valor: d.valor });
+        state.data.despesas.filter(d => d.dataIso && d.dataIso.startsWith(state.selectedYearMonth)).forEach(d => {
+            itens.push({ data: d.dataIso, tipo: 'Gasto', desc: d.descricao, valor: parseFloat(d.valor) || 0 });
         });
         state.data.contasFixas.forEach(c => {
-            const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
-            if (pagamentoInfo === undefined) {
-                const inicioOk = c.mesInicioIso <= state.selectedYearMonth;
-                const fimOk = !c.mesFimIso || c.mesFimIso >= state.selectedYearMonth;
-                if (inicioOk && fimOk) {
-                    const [ano, mes] = state.selectedYearMonth.split('-');
-                    const diaValido = Math.min(c.diaVencimento, new Date(ano, mes, 0).getDate());
-                    itens.push({ data: `${state.selectedYearMonth}-${String(diaValido).padStart(2,'0')}`, tipo: 'Conta Fixa (Prevista)', desc: c.descricao, valor: c.valorMedio });
-                }
+            const inicioOk = c.mesInicioIso <= state.selectedYearMonth;
+            const fimOk = !c.mesFimIso || c.mesFimIso >= state.selectedYearMonth;
+            if (inicioOk && fimOk) {
+                const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
+                const valorEfetivo = (pagamentoInfo !== undefined && pagamentoInfo.valor !== undefined) ? pagamentoInfo.valor : c.valorMedio;
+                const [ano, mes] = state.selectedYearMonth.split('-');
+                const diaValido = Math.min(c.diaVencimento, new Date(ano, mes, 0).getDate());
+                itens.push({ data: `${state.selectedYearMonth}-${String(diaValido).padStart(2,'0')}`, tipo: 'Conta Fixa', desc: c.descricao, valor: parseFloat(valorEfetivo) || 0 });
             }
         });
         return itens.sort((a,b) => a.data.localeCompare(b.data));
@@ -750,7 +806,8 @@
                 <h3>Opções e Dados</h3>
                 <p style="color:#666; font-size:15px; margin-bottom:4px;">Escolha o que deseja fazer:</p>
                 
-                <button class="btn-primary" style="margin-top:0;" onclick="this.parentElement.parentElement.remove(); abrirOpcoesExportacao();">📤 Compartilhar / Exportar</button>
+                <button class="btn-primary" style="margin-top:0;" onclick="this.parentElement.parentElement.remove(); baixarBackupManualJson();">💾 Baixar Backup Atual (JSON)</button>
+                <button class="btn-secondary" style="margin-top:0; border-color: #2E7D32; color: #1B5E20;" onclick="this.parentElement.parentElement.remove(); abrirOpcoesExportacao();">📤 Compartilhar / Exportar</button>
                 <button class="btn-secondary" style="margin-top:0; border-color: #2E7D32; color: #1B5E20;" onclick="this.parentElement.parentElement.remove(); acionarImportacaoCsv();">📥 Importar Dados (CSV)</button>
                 <button class="btn-secondary" style="margin-top:0; border-color: #1565C0; color: #0D47A1;" onclick="this.parentElement.parentElement.remove(); acionarRestauracaoJson();">🔄 Restaurar Backup (JSON)</button>
                 
@@ -785,7 +842,10 @@
         const itens = obterItensCronologicos();
         let txt = `📊 *RESUMO DE GASTOS - ${nomeMesFormatado}*\n`;
         txt += `• Valor Inicial: ${fmtMoeda(res.inicial)}\n`;
-        txt += `• Valor Gasto: ${fmtMoeda(res.gasto)}\n`;
+        txt += `• Valor Gasto (Total): ${fmtMoeda(res.gastoTotal)}\n`;
+        txt += `  - Contas já pagas: ${fmtMoeda(res.contasPagas)}\n`;
+        txt += `  - Contas a pagar: ${fmtMoeda(res.contasAPagar)}\n`;
+        txt += `  - Outros Gastos: ${fmtMoeda(res.outrosGastos)}\n`;
         txt += `• *Valor Restante: ${fmtMoeda(res.restante)}*\n\n`;
         txt += `📅 *EXTRATO CRONOLÓGICO:*\n`;
 
