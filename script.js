@@ -1,6 +1,5 @@
-if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
-}
+const GOOGLE_DRIVE_BACKUP_URL = 'COLE_AQUI_A_URL_DO_SEU_APPS_SCRIPT';
+let backupDriveEmAndamento = false;
 
 let state = {
     currentScreen: 'home',
@@ -23,15 +22,74 @@ function loadData() {
                 receitas: Array.isArray(parsed.receitas) ? parsed.receitas : [],
                 despesas: Array.isArray(parsed.despesas) ? parsed.despesas : [],
                 contasFixas: Array.isArray(parsed.contasFixas) ? parsed.contasFixas : [],
-                pagamentosContas: (parsed.pagamentosContas && typeof parsed.pagamentosContas === 'object') ? parsed.pagamentosContas : {}
+                pagamentosContas: (parsed.pagamentosContas && typeof parsed.pagamentosContas === 'object') ? parsed.pagamentosContas : {},
+                changelog: Array.isArray(parsed.changelog) ? parsed.changelog : []
             };
         } catch (e) {}
     }
-    return { receitas: [], despesas: [], contasFixas: [], pagamentosContas: {} };
+    return { receitas: [], despesas: [], contasFixas: [], pagamentosContas: {}, changelog: [] };
 }
 
 function saveData() {
     localStorage.setItem('meus_gastos_data', JSON.stringify(state.data));
+    tentarBackupSilenciosoDrive();
+}
+
+function obterIdDispositivo() {
+    let deviceId = localStorage.getItem('meus_gastos_device_id');
+    if (!deviceId) {
+        deviceId = crypto.randomUUID().slice(0, 8);
+        localStorage.setItem('meus_gastos_device_id', deviceId);
+    }
+    return deviceId;
+}
+
+function tentarBackupSilenciosoDrive() {
+    if (!GOOGLE_DRIVE_BACKUP_URL || !GOOGLE_DRIVE_BACKUP_URL.startsWith('https://')) return;
+    if (backupDriveEmAndamento) return;
+
+    const hoje = hojeIso();
+    const ultimoBackup = localStorage.getItem('meus_gastos_last_drive_backup');
+    if (ultimoBackup === hoje) return;
+
+    backupDriveEmAndamento = true;
+
+    const payload = {
+        deviceId: obterIdDispositivo(),
+        dados: state.data
+    };
+
+    fetch(GOOGLE_DRIVE_BACKUP_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+    })
+    .then(res => res.ok ? res.json() : null)
+    .then(resposta => {
+        if (resposta && resposta.status === 'ok') {
+            localStorage.setItem('meus_gastos_last_drive_backup', hoje);
+        }
+    })
+    .catch(() => {})
+    .finally(() => {
+        backupDriveEmAndamento = false;
+    });
+}
+
+function registrarChangelog(acao, categoria, descricao, valor, dataRef = '', detalheExtra = '') {
+    if (!Array.isArray(state.data.changelog)) {
+        state.data.changelog = [];
+    }
+    state.data.changelog.push({
+        id: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        acao: acao,
+        categoria: categoria,
+        descricao: descricao,
+        valor: parseFloat(valor) || 0,
+        dataRef: dataRef,
+        detalheExtra: detalheExtra
+    });
 }
 
 function baixarBackupManualJson() {
@@ -55,6 +113,18 @@ const fmtMoeda = (val) => {
 const arredondar = (val) => Math.round(((isNaN(val) ? 0 : val) + Number.EPSILON) * 100) / 100;
 const hojeIso = () => new Date().toISOString().slice(0, 10);
 
+function parseIsoLocal(isoStr) {
+    const [y, m, d] = isoStr.split('-').map(Number);
+    return new Date(y, m - 1, d, 12, 0, 0);
+}
+
+function diasEntreInclusivo(inicioIso, fimIso) {
+    if (fimIso < inicioIso) return 0;
+    const d1 = parseIsoLocal(inicioIso);
+    const d2 = parseIsoLocal(fimIso);
+    return Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1;
+}
+
 function formatarNomeMes(yearMonth) {
     const [ano, mes] = yearMonth.split('-');
     const dataRef = new Date(ano, mes - 1, 1);
@@ -70,10 +140,258 @@ function isMesPassado(yearMonth) {
 
 function renderHeaderMesFixo() {
     return `
-        <div style="margin-bottom: 16px;">
-            <div class="header-mes-fixo" style="margin-bottom: 4px;">🗓️ ${formatarNomeMes(state.selectedYearMonth)}</div>
+        <div class="header-mes-sutil">
+            <span>Mês:</span>
+            <strong style="color: #ffffff; font-size: 19px;">${formatarNomeMes(state.selectedYearMonth)}</strong>
         </div>
     `;
+}
+
+function obterSemanasDoMes(yearMonth) {
+    const [anoStr, mesStr] = yearMonth.split('-');
+    const ano = parseInt(anoStr, 10);
+    const mes = parseInt(mesStr, 10);
+
+    const ultimoDiaMes = new Date(ano, mes, 0).getDate();
+    let semanas = [];
+
+    let proxAno = ano;
+    let proxMes = mes + 1;
+    if (proxMes > 12) { proxMes = 1; proxAno++; }
+
+    let diaInicio = 1;
+    let numSemana = 1;
+
+    while (diaInicio <= ultimoDiaMes) {
+        let dataInicio = new Date(ano, mes - 1, diaInicio, 12, 0, 0);
+        let diaSemanaInicio = dataInicio.getDay();
+        let diasAteDomingo = diaSemanaInicio === 0 ? 0 : (7 - diaSemanaInicio);
+        let diaFimProvisorio = diaInicio + diasAteDomingo;
+
+        let diaFim;
+        if (diaFimProvisorio >= ultimoDiaMes) {
+            const dataLimiteDia4 = new Date(proxAno, proxMes - 1, 4, 12, 0, 0);
+            let dataDomingoUltima = new Date(ano, mes - 1, diaFimProvisorio, 12, 0, 0);
+            
+            if (dataDomingoUltima <= dataLimiteDia4) {
+                diaFim = diaFimProvisorio;
+            } else {
+                diaFim = ultimoDiaMes + 4;
+            }
+        } else {
+            diaFim = diaFimProvisorio;
+        }
+
+        const inicioIso = `${anoStr}-${String(mes).padStart(2, '0')}-${String(diaInicio).padStart(2, '0')}`;
+        let fimIso;
+        if (diaFim > ultimoDiaMes) {
+            let excesso = diaFim - ultimoDiaMes;
+            fimIso = `${String(proxAno)}-${String(proxMes).padStart(2, '0')}-${String(excesso).padStart(2, '0')}`;
+        } else {
+            fimIso = `${anoStr}-${String(mes).padStart(2, '0')}-${String(diaFim).padStart(2, '0')}`;
+        }
+
+        const diasNaSemana = diasEntreInclusivo(inicioIso, fimIso);
+
+        semanas.push({
+            numero: numSemana,
+            inicioIso: inicioIso,
+            fimIso: fimIso,
+            diaInicioNum: diaInicio,
+            diaFimNum: Math.min(diaFim, ultimoDiaMes),
+            diasNaSemana: diasNaSemana
+        });
+
+        diaInicio = (diaFim > ultimoDiaMes ? ultimoDiaMes + 1 : diaFim) + 1;
+        numSemana++;
+    }
+
+    return semanas;
+}
+
+function calcularDadosSemanais(yearMonth) {
+    const semanas = obterSemanasDoMes(yearMonth);
+    const [ano, mes] = yearMonth.split('-').map(Number);
+    const diasNoMes = new Date(ano, mes, 0).getDate();
+    const fimCicloIso = semanas.length > 0 ? semanas[semanas.length - 1].fimIso : `${yearMonth}-${String(diasNoMes).padStart(2, '0')}`;
+    const hojeIsoStr = hojeIso();
+
+    const receitasMes = state.data.receitas
+        .filter(r => r.dataIso && r.dataIso.startsWith(yearMonth))
+        .slice()
+        .sort((a, b) => a.dataIso.localeCompare(b.dataIso));
+
+    const recebidoMes = arredondar(
+        receitasMes.reduce((acc, r) => acc + (parseFloat(r.valor) || 0), 0)
+    );
+
+    let contasAtivas = [];
+    let totalContasMes = 0;
+    
+    state.data.contasFixas.forEach(c => {
+        const inicioOk = c.mesInicioIso <= yearMonth;
+        const fimOk = !c.mesFimIso || c.mesFimIso >= yearMonth;
+        if (!inicioOk || !fimOk) return;
+
+        const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${yearMonth}`];
+        const estaPaga = pagamentoInfo !== undefined && pagamentoInfo.valor !== undefined;
+        const valorConta = estaPaga 
+            ? parseFloat(pagamentoInfo.valor) || 0 
+            : parseFloat(c.valorMedio) || 0;
+
+        const diaVenc = Math.min(c.diaVencimento, diasNoMes);
+        let diaPagamento = null;
+        if (estaPaga && pagamentoInfo.dataIso) {
+            diaPagamento = parseInt(pagamentoInfo.dataIso.split('-')[2], 10);
+        }
+
+        totalContasMes += valorConta;
+        contasAtivas.push({
+            id: c.id,
+            descricao: c.descricao,
+            valor: valorConta,
+            diaVencimento: diaVenc,
+            paga: estaPaga,
+            diaPagamento: diaPagamento
+        });
+    });
+    totalContasMes = arredondar(totalContasMes);
+
+    const contasPorSemana = semanas.map((sem) => {
+        let contasNestaSemana = [];
+        let contasPagasSemana = [];
+        let contasAPagarSemana = [];
+        let somaContasSemana = 0;
+        let somaContasPagas = 0;
+        let somaContasAPagar = 0;
+
+        contasAtivas.forEach(c => {
+            let pertence = false;
+            if (sem.numero === semanas.length) {
+                if (c.diaVencimento >= sem.diaInicioNum && c.diaVencimento <= diasNoMes) {
+                    pertence = true;
+                } else if (c.diaVencimento >= 1 && c.diaVencimento <= 4 && !sem.fimIso.startsWith(yearMonth)) {
+                    pertence = true;
+                }
+            } else {
+                if (c.diaVencimento >= sem.diaInicioNum && c.diaVencimento <= sem.diaFimNum) {
+                    pertence = true;
+                }
+            }
+            if (pertence) {
+                contasNestaSemana.push(c);
+                somaContasSemana += c.valor;
+                if (c.paga) {
+                    contasPagasSemana.push(c);
+                    somaContasPagas += c.valor;
+                } else {
+                    contasAPagarSemana.push(c);
+                    somaContasAPagar += c.valor;
+                }
+            }
+        });
+        return {
+            contasNestaSemana,
+            contasPagasSemana,
+            contasAPagarSemana,
+            somaContasSemana: arredondar(somaContasSemana),
+            somaContasPagas: arredondar(somaContasPagas),
+            somaContasAPagar: arredondar(somaContasAPagar)
+        };
+    });
+
+    let resultadoSemanas = [];
+    let taxaDiariaAtual = 0;
+    let contasNaoCobertas = totalContasMes;
+
+    semanas.forEach((sem, idx) => {
+        const {
+            contasNestaSemana,
+            contasPagasSemana,
+            contasAPagarSemana,
+            somaContasSemana,
+            somaContasPagas,
+            somaContasAPagar
+        } = contasPorSemana[idx];
+        const receitasNaSemana = receitasMes.filter(r => r.dataIso >= sem.inicioIso && r.dataIso <= sem.fimIso);
+
+        let valorBaseSemana = 0;
+
+        if (receitasNaSemana.length === 0) {
+            valorBaseSemana = arredondar(taxaDiariaAtual * sem.diasNaSemana);
+        } else {
+            let cursorIso = sem.inicioIso;
+            let acumuladoSemana = 0;
+
+            receitasNaSemana.forEach(r => {
+                const dataRecIso = r.dataIso < sem.inicioIso ? sem.inicioIso : r.dataIso;
+                const diasAntesRec = diasEntreInclusivo(cursorIso, sem.fimIso) - diasEntreInclusivo(dataRecIso, sem.fimIso);
+                if (diasAntesRec > 0) {
+                    acumuladoSemana += diasAntesRec * taxaDiariaAtual;
+                }
+
+                const diasRestantesCiclo = diasEntreInclusivo(dataRecIso, fimCicloIso);
+                const saldoRestanteAnterior = diasRestantesCiclo * taxaDiariaAtual;
+
+                let valorNovo = parseFloat(r.valor) || 0;
+                if (contasNaoCobertas > 0) {
+                    const abatimentoContas = Math.min(valorNovo, contasNaoCobertas);
+                    valorNovo -= abatimentoContas;
+                    contasNaoCobertas = arredondar(contasNaoCobertas - abatimentoContas);
+                }
+
+                taxaDiariaAtual = diasRestantesCiclo > 0 ? ((saldoRestanteAnterior + valorNovo) / diasRestantesCiclo) : 0;
+                cursorIso = dataRecIso;
+            });
+
+            const diasFinaisSemana = diasEntreInclusivo(cursorIso, sem.fimIso);
+            acumuladoSemana += diasFinaisSemana * taxaDiariaAtual;
+            valorBaseSemana = arredondar(acumuladoSemana);
+        }
+
+        const recebidoSemana = arredondar(valorBaseSemana + somaContasSemana);
+
+        const gastoAvulsoSemana = arredondar(
+            state.data.despesas
+                .filter(d => !d.contaFixaId && d.dataIso && d.dataIso >= sem.inicioIso && d.dataIso <= sem.fimIso)
+                .reduce((acc, d) => acc + (parseFloat(d.valor) || 0), 0)
+        );
+
+        const gastoTotalSemana = arredondar(somaContasSemana + gastoAvulsoSemana);
+        const restanteSemana = arredondar(recebidoSemana - gastoTotalSemana);
+
+        if (hojeIsoStr > sem.fimIso && restanteSemana < 0 && idx < semanas.length - 1) {
+            const proxSem = semanas[idx + 1];
+            const diasRestantesProximasSemanas = diasEntreInclusivo(proxSem.inicioIso, fimCicloIso);
+            if (diasRestantesProximasSemanas > 0) {
+                const saldoRestanteCiclo = (diasRestantesProximasSemanas * taxaDiariaAtual) + restanteSemana;
+                taxaDiariaAtual = Math.max(0, saldoRestanteCiclo / diasRestantesProximasSemanas);
+            }
+        }
+
+        resultadoSemanas.push({
+            numero: sem.numero,
+            inicioIso: sem.inicioIso,
+            fimIso: sem.fimIso,
+            recebido: recebidoSemana,
+            valorBase: valorBaseSemana,
+            gastoTotal: gastoTotalSemana,
+            contasSemana: contasNestaSemana,
+            contasPagasSemana: contasPagasSemana,
+            contasAPagarSemana: contasAPagarSemana,
+            somaContas: somaContasSemana,
+            somaContasPagas: somaContasPagas,
+            somaContasAPagar: somaContasAPagar,
+            gastoAvulso: gastoAvulsoSemana,
+            restante: restanteSemana
+        });
+    });
+
+    return {
+        recebidoMes: recebidoMes,
+        totalContasMes: totalContasMes,
+        semanas: resultadoSemanas
+    };
 }
 
 function calcularDadosBannerHome() {
@@ -83,18 +401,11 @@ function calcularDadosBannerHome() {
     const mesAtual = hoje.getMonth() + 1;
 
     const isPassado = (ano < anoAtual) || (ano === anoAtual && mes < mesAtual);
-    const diasNoMes = new Date(ano, mes, 0).getDate();
 
     const recebido = arredondar(
         state.data.receitas
             .filter(r => r.dataIso && r.dataIso.startsWith(state.selectedYearMonth))
             .reduce((acc, r) => acc + (parseFloat(r.valor) || 0), 0)
-    );
-
-    const avulsas = arredondar(
-        state.data.despesas
-            .filter(d => d.dataIso && d.dataIso.startsWith(state.selectedYearMonth))
-            .reduce((acc, d) => acc + (parseFloat(d.valor) || 0), 0)
     );
 
     let totalContasPagasMes = 0;
@@ -113,13 +424,18 @@ function calcularDadosBannerHome() {
     });
 
     const contasFixasTotalMes = arredondar(totalContasPagasMes + totalContasPendentesMes);
+    
+    const avulsas = arredondar(
+        state.data.despesas
+            .filter(d => d.dataIso && d.dataIso.startsWith(state.selectedYearMonth))
+            .reduce((acc, d) => acc + (parseFloat(d.valor) || 0), 0)
+    );
+
     const gastoTotalMes = arredondar(avulsas + contasFixasTotalMes);
     const restanteMes = arredondar(recebido - gastoTotalMes);
 
     let corBorda = '#047857';
-    if (restanteMes < 0) {
-        corBorda = '#dc2626';
-    }
+    if (restanteMes < 0) corBorda = '#dc2626';
 
     if (isPassado) {
         const restoFinal = isNaN(restanteMes) ? 0 : restanteMes;
@@ -133,36 +449,16 @@ function calcularDadosBannerHome() {
         `;
         return { textoBanner, corBorda };
     } else {
-        const diaHoje = hoje.getDate();
-        const diasRestantesNoMes = Math.max(1, (diasNoMes - diaHoje) + 1);
-
-        const dFim = (ano === hoje.getFullYear() && mes === hoje.getMonth() + 1) ? new Date(hoje) : new Date(ano, mes - 1, diasNoMes);
-        const diaSemanaHoje = dFim.getDay();
-        const diasAteDomingo = diaSemanaHoje === 0 ? 1 : (7 - diaSemanaHoje + 1);
-        const diasProjecaoSemana = Math.min(diasAteDomingo, diasRestantesNoMes);
-
-        const dInicioSemana = new Date(dFim);
-        dInicioSemana.setDate(dFim.getDate() - (diaSemanaHoje === 0 ? 6 : diaSemanaHoje - 1));
-        const inicioStr = dInicioSemana.toISOString().slice(0, 10);
-        const fimStr = dFim.toISOString().slice(0, 10);
-
-        const gastoPeriodoSemana = arredondar(
-            state.data.despesas
-                .filter(d => !d.contaFixaId && d.dataIso && d.dataIso >= inicioStr && d.dataIso <= fimStr)
-                .reduce((acc, d) => acc + (parseFloat(d.valor) || 0), 0)
-        );
-
-        const baseCalculoSemana = Math.max(0, recebido - contasFixasTotalMes);
-        const disponivelSemana = arredondar(((baseCalculoSemana / diasRestantesNoMes) * diasProjecaoSemana) - gastoPeriodoSemana);
-
-        if (disponivelSemana < 0 || restanteMes < 0) {
-            corBorda = '#dc2626';
-        } else {
-            corBorda = '#047857';
+        const dadosSemestrais = calcularDadosSemanais(state.selectedYearMonth);
+        const hojeIsoStr = hojeIso();
+        
+        let semanaAtualObj = dadosSemestrais.semanas.find(s => hojeIsoStr >= s.inicioIso && hojeIsoStr <= s.fimIso);
+        if (!semanaAtualObj && dadosSemestrais.semanas.length > 0) {
+            semanaAtualObj = hojeIsoStr < dadosSemestrais.semanas[0].inicioIso ? dadosSemestrais.semanas[0] : dadosSemestrais.semanas[dadosSemestrais.semanas.length - 1];
         }
 
+        const dispSemanaFinal = semanaAtualObj ? semanaAtualObj.restante : 0;
         const dispMesFinal = isNaN(restanteMes) ? 0 : restanteMes;
-        const dispSemanaFinal = isNaN(disponivelSemana) ? 0 : disponivelSemana;
 
         const corValorSemana = dispSemanaFinal < 0 ? '#dc2626' : '#047857';
         const corValorMes = dispMesFinal < 0 ? '#dc2626' : '#047857';
@@ -171,11 +467,11 @@ function calcularDadosBannerHome() {
             <div style="font-size: 14px; color: #334155; margin-bottom: 8px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px;">⭐ Valor Disponível</div>
             <div style="display: flex; justify-content: space-around; gap: 8px;">
                 <div style="flex: 1; border-right: 2px solid #e2e8f0; padding-right: 4px;">
-                    <span style="font-size: 13px; color: #475569;">Até Domingo (Semana)</span><br>
+                    <span style="font-size: 13px; color: #475569;">Até o fim da semana</span><br>
                     <span style="font-size: 20px; font-weight: 800; color: ${corValorSemana};">${fmtMoeda(dispSemanaFinal)}</span>
                 </div>
                 <div style="flex: 1; padding-left: 4px;">
-                    <span style="font-size: 13px; color: #475569;">No Mês Inteiro</span><br>
+                    <span style="font-size: 13px; color: #475569;">Até o fim do mês</span><br>
                     <span style="font-size: 20px; font-weight: 800; color: ${corValorMes};">${fmtMoeda(dispMesFinal)}</span>
                 </div>
             </div>
@@ -234,8 +530,8 @@ function renderHome() {
             </div>
 
             <div class="grid-2x2">
-                <button class="big-btn btn-recebido" onclick="navegar('rec')">Inserir Valor Recebido</button>
-                <button class="big-btn btn-gasto" onclick="navegar('desp')">Inserir Gasto</button>
+                <button class="big-btn btn-recebido" onclick="navegar('rec')">Recebidos</button>
+                <button class="big-btn btn-gasto" onclick="navegar('desp')">Gastos</button>
             </div>
             <div class="grid-2x2">
                 <button class="big-btn btn-restante" onclick="clicarBotaoResumo()">Ver Resumo</button>
@@ -245,7 +541,7 @@ function renderHome() {
 
         <div style="margin-top: 32px; padding-bottom: 12px;">
             <div class="month-selector">
-                <button class="month-btn" onclick="mudarMes(-1)">◀ Mês Anterior</button>
+                <button class="month-btn" onclick="mudarMes(-1)">◀ Anterior</button>
                 <span class="month-title">${nomeMesFormatado}</span>
                 <button class="month-btn" onclick="mudarMes(1)" ${isMesAtualOuFuturoSelecao ? 'disabled' : ''}>Próximo ▶</button>
             </div>
@@ -263,7 +559,6 @@ function clicarBotaoResumo() {
     const hoje = new Date();
     const anoAtual = hoje.getFullYear();
     const mesAtual = hoje.getMonth() + 1;
-
     const isMesAtual = (ano === anoAtual && mes === mesAtual);
 
     if (isMesAtual) {
@@ -363,6 +658,7 @@ function salvarReceita() {
     if (data > hojeIso()) { alert('Não é permitido registrar recebimentos com data no futuro!'); return; }
 
     state.data.receitas.push({ id: crypto.randomUUID(), descricao: desc, valor: val, dataIso: data });
+    registrarChangelog('Adicionado', 'Recebido', desc, val, data);
     saveData();
     state.currentScreen = 'success';
     state.successMessage = 'recebimento';
@@ -374,6 +670,10 @@ function salvarReceita() {
 function excluirReceita(id) {
     if (isMesPassado(state.selectedYearMonth)) return;
     if (confirm('Deseja realmente excluir este recebimento?')) {
+        const itemRemovido = state.data.receitas.find(r => r.id === id);
+        if (itemRemovido) {
+            registrarChangelog('Removido', 'Recebido', itemRemovido.descricao, itemRemovido.valor, itemRemovido.dataIso);
+        }
         state.data.receitas = state.data.receitas.filter(r => r.id !== id);
         saveData();
         render();
@@ -387,12 +687,13 @@ function renderFormDespesa() {
     const despesasMes = state.data.despesas.filter(d => !d.contaFixaId && d.dataIso && d.dataIso.startsWith(state.selectedYearMonth));
 
     despesasMes.forEach(d => {
+        const catTxt = d.categoria ? ` • ${d.categoria}` : '';
         const formaPgtoTxt = d.formaPagamento ? ` • ${d.formaPagamento}` : '';
         const botaoExcluir = passado ? '' : `<button class="btn-danger" style="width: auto; padding: 10px 14px; font-size: 15px; height: auto;" onclick="excluirDespesa('${d.id}')">Excluir</button>`;
         htmlDespesas += `
             <div class="list-item">
                 <div style="flex-grow: 1; text-align: left;">
-                    <strong>${d.descricao}</strong><br><small style="color: #475569; font-weight: bold;">Data: ${d.dataIso.split('-').reverse().join('/')}${formaPgtoTxt}</small><br>
+                    <strong>${d.descricao}</strong><br><small style="color: #475569; font-weight: bold;">Data: ${d.dataIso.split('-').reverse().join('/')}${catTxt}${formaPgtoTxt}</small><br>
                     <span style="color: #991b1b; font-size: 20px; font-weight: 800;">${fmtMoeda(d.valor)}</span>
                 </div>
                 ${botaoExcluir}
@@ -407,6 +708,20 @@ function renderFormDespesa() {
         <input type="number" step="0.01" id="val-desp" placeholder="0,00">
         <label>Com o quê você gastou?</label>
         <input type="text" id="desc-desp" placeholder="Ex: Mercado, Farmácia...">
+        <label>Categoria</label>
+        <select id="categoria-desp">
+            <option value="">Selecione uma categoria</option>
+            <option value="Açougue">Açougue</option>
+            <option value="Condução">Condução</option>
+            <option value="Encomenda">Encomenda</option>
+            <option value="Entretenimento">Entretenimento</option>
+            <option value="Farmácia">Farmácia</option>
+            <option value="Feira">Feira</option>
+            <option value="Mercado">Mercado</option>
+            <option value="Outros">Outros</option>
+            <option value="Presentes">Presentes</option>
+            <option value="Restaurante">Restaurante</option>
+        </select>
         <label>Como você pagou?</label>
         <select id="forma-pagamento-desp">
             <option value="Cartão de Crédito">Cartão de Crédito</option>
@@ -446,6 +761,7 @@ function salvarDespesa() {
     if (isMesPassado(state.selectedYearMonth)) { alert('Não é permitido alterar meses passados.'); return; }
     const val = parseFloat(document.getElementById('val-desp').value.replace(',', '.'));
     const desc = document.getElementById('desc-desp').value.trim();
+    const categoria = document.getElementById('categoria-desp').value;
     const formaPagamento = document.getElementById('forma-pagamento-desp').value;
     const data = document.getElementById('data-desp').value;
     
@@ -457,8 +773,12 @@ function salvarDespesa() {
         descricao: desc, 
         valor: val, 
         dataIso: data,
+        categoria: categoria || '',
         formaPagamento: formaPagamento 
     });
+
+    const detalhesLog = [categoria, formaPagamento].filter(Boolean).join(' • ');
+    registrarChangelog('Adicionado', 'Gasto', desc, val, data, detalhesLog);
     saveData();
     state.currentScreen = 'success';
     state.successMessage = 'gasto';
@@ -470,6 +790,11 @@ function salvarDespesa() {
 function excluirDespesa(id) {
     if (isMesPassado(state.selectedYearMonth)) return;
     if (confirm('Deseja realmente excluir este gasto?')) {
+        const itemRemovido = state.data.despesas.find(d => d.id === id);
+        if (itemRemovido) {
+            const detalhesLog = [itemRemovido.categoria, itemRemovido.formaPagamento].filter(Boolean).join(' • ');
+            registrarChangelog('Removido', 'Gasto', itemRemovido.descricao, itemRemovido.valor, itemRemovido.dataIso, detalhesLog);
+        }
         state.data.despesas = state.data.despesas.filter(d => d.id !== id);
         saveData();
         render();
@@ -575,6 +900,7 @@ function salvarContaFixa() {
         mesInicioIso: state.selectedYearMonth,
         mesFimIso: null
     });
+    registrarChangelog('Adicionado', 'Conta Fixa', desc, val, state.selectedYearMonth, `Vencimento dia ${diaVenc}`);
     saveData();
     state.currentScreen = 'success';
     state.successMessage = 'conta';
@@ -593,6 +919,7 @@ function excluirContaFixa(id) {
         const dataAnt = new Date(ano, mes - 2, 1);
         conta.mesFimIso = dataAnt.toISOString().slice(0, 7);
         delete state.data.pagamentosContas[`${id}_${state.selectedYearMonth}`];
+        registrarChangelog('Removido', 'Conta Fixa', conta.descricao, conta.valorMedio, state.selectedYearMonth, `Vencimento dia ${conta.diaVencimento}`);
         saveData();
         render();
     }
@@ -643,13 +970,21 @@ function confirmarPagamentoReal() {
     if (isMesPassado(state.selectedYearMonth)) return;
     const valReal = parseFloat(document.getElementById("val-real-pago").value.replace(',', '.'));
     const elData = document.getElementById("data-real-pago");
-    const dataReal = elData ? elData.value : (state.data.pagamentosContas[`${state.activeContaParaPagar.id}_${state.selectedYearMonth}`]?.dataIso || hojeIso());
+    const pagamentoAnterior = state.data.pagamentosContas[`${state.activeContaParaPagar.id}_${state.selectedYearMonth}`];
+    const dataReal = elData ? elData.value : (pagamentoAnterior?.dataIso || hojeIso());
     
     if (isNaN(valReal) || valReal <= 0 || !dataReal) { alert('Preencha os campos corretamente!'); return; }
     if (elData && dataReal > hojeIso()) { alert('Não é permitido registrar pagamentos com data no futuro!'); return; }
 
     const c = state.activeContaParaPagar;
     state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`] = { valor: valReal, dataIso: dataReal };
+
+    if (pagamentoAnterior !== undefined) {
+        registrarChangelog('Valor Pago Alterado', 'Conta Fixa', c.descricao, valReal, dataReal, `Anterior: ${fmtMoeda(pagamentoAnterior.valor)}`);
+    } else {
+        registrarChangelog('Pagamento Registrado', 'Conta Fixa', c.descricao, valReal, dataReal, `Estimado: ${fmtMoeda(c.valorMedio)}`);
+    }
+
     saveData();
     state.currentScreen = 'success';
     state.successMessage = 'pagamento';
@@ -687,101 +1022,95 @@ function escolherPeriodo(tipo) {
 }
 
 function calcularResumo() {
-    const [ano, mes] = state.selectedYearMonth.split('-').map(Number);
-    const diasNoMes = new Date(ano, mes, 0).getDate();
-
-    const recebido = arredondar(
-        state.data.receitas
-            .filter(r => r.dataIso && r.dataIso.startsWith(state.selectedYearMonth))
-            .reduce((acc, r) => acc + (parseFloat(r.valor) || 0), 0)
-    );
-
-    const avulsas = arredondar(
-        state.data.despesas
-            .filter(d => d.dataIso && d.dataIso.startsWith(state.selectedYearMonth))
-            .reduce((acc, d) => acc + (parseFloat(d.valor) || 0), 0)
-    );
-
-    let totalContasPagas = 0;
-    let totalContasPendentes = 0;
-
-    state.data.contasFixas.forEach(c => {
-        const inicioOk = c.mesInicioIso <= state.selectedYearMonth;
-        const fimOk = !c.mesFimIso || c.mesFimIso >= state.selectedYearMonth;
-        if (!inicioOk || !fimOk) return;
-
-        const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
-        if (pagamentoInfo !== undefined && pagamentoInfo.valor !== undefined) {
-            totalContasPagas += parseFloat(pagamentoInfo.valor) || 0;
-        } else {
-            totalContasPendentes += parseFloat(c.valorMedio) || 0;
-        }
-    });
-
-    totalContasPagas = arredondar(totalContasPagas);
-    totalContasPendentes = arredondar(totalContasPendentes);
-
-    const contasFixasTotal = arredondar(totalContasPagas + totalContasPendentes);
-    const gastoTotalGeral = arredondar(contasFixasTotal + avulsas);
-    const restanteMes = arredondar(recebido - gastoTotalGeral);
+    const dadosSemanas = calcularDadosSemanais(state.selectedYearMonth);
 
     if (state.summaryType === 'mes') {
-        const valorGastoTotalComContas = arredondar(avulsas + totalContasPagas + totalContasPendentes);
+        const [ano, mes] = state.selectedYearMonth.split('-').map(Number);
+        const diasNoMes = new Date(ano, mes, 0).getDate();
+
+        const avulsas = arredondar(
+            state.data.despesas
+                .filter(d => d.dataIso && d.dataIso.startsWith(state.selectedYearMonth))
+                .reduce((acc, d) => acc + (parseFloat(d.valor) || 0), 0)
+        );
+
+        let totalContasPagas = 0;
+        let totalContasPendentes = 0;
+        let contasPagasMes = [];
+        let contasAPagarMes = [];
+
+        state.data.contasFixas.forEach(c => {
+            const inicioOk = c.mesInicioIso <= state.selectedYearMonth;
+            const fimOk = !c.mesFimIso || c.mesFimIso >= state.selectedYearMonth;
+            if (!inicioOk || !fimOk) return;
+
+            const diaVenc = Math.min(c.diaVencimento, diasNoMes);
+            const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
+            if (pagamentoInfo !== undefined && pagamentoInfo.valor !== undefined) {
+                const valPago = parseFloat(pagamentoInfo.valor) || 0;
+                const diaPagamento = pagamentoInfo.dataIso ? parseInt(pagamentoInfo.dataIso.split('-')[2], 10) : diaVenc;
+                totalContasPagas += valPago;
+                contasPagasMes.push({
+                    descricao: c.descricao,
+                    valor: valPago,
+                    diaVencimento: diaVenc,
+                    diaPagamento: diaPagamento
+                });
+            } else {
+                const valPend = parseFloat(c.valorMedio) || 0;
+                totalContasPendentes += valPend;
+                contasAPagarMes.push({
+                    descricao: c.descricao,
+                    valor: valPend,
+                    diaVencimento: diaVenc
+                });
+            }
+        });
+
+        totalContasPagas = arredondar(totalContasPagas);
+        totalContasPendentes = arredondar(totalContasPendentes);
+        const contasFixasTotal = arredondar(totalContasPagas + totalContasPendentes);
+        const gastoTotalGeral = arredondar(contasFixasTotal + avulsas);
+        const restanteMes = arredondar(dadosSemanas.recebidoMes - gastoTotalGeral);
+
         return {
-            inicial: recebido,
-            gastoTotal: valorGastoTotalComContas,
+            inicial: dadosSemanas.recebidoMes,
+            gastoTotal: gastoTotalGeral,
             contasPagas: totalContasPagas,
             contasAPagar: totalContasPendentes,
+            contasPagasMes: contasPagasMes,
+            contasAPagarMes: contasAPagarMes,
             outrosGastos: avulsas,
             restante: restanteMes
         };
     } else {
-        const hoje = new Date();
-        const anoAtual = hoje.getFullYear();
-        const mesAtual = hoje.getMonth() + 1;
-        
-        let diasRestantesNoMes = diasNoMes;
-        if (ano === anoAtual && mes === mesAtual) {
-            const diaHoje = hoje.getDate();
-            diasRestantesNoMes = Math.max(1, (diasNoMes - diaHoje) + 1);
+        const hojeIsoStr = hojeIso();
+        let semanaObj = dadosSemanas.semanas.find(s => hojeIsoStr >= s.inicioIso && hojeIsoStr <= s.fimIso);
+        if (!semanaObj && dadosSemanas.semanas.length > 0) {
+            semanaObj = hojeIsoStr < dadosSemanas.semanas[0].inicioIso ? dadosSemanas.semanas[0] : dadosSemanas.semanas[dadosSemanas.semanas.length - 1];
         }
 
-        const dFim = (ano === anoAtual && mes === mesAtual) ? new Date(hoje) : new Date(ano, mes - 1, diasNoMes);
-        const diaSemanaHoje = dFim.getDay();
-        const diasAteDomingo = diaSemanaHoje === 0 ? 1 : (7 - diaSemanaHoje + 1);
-        const diasProjecaoSemana = Math.min(diasAteDomingo, diasRestantesNoMes);
-        
-        const dInicioSemana = new Date(dFim);
-        dInicioSemana.setDate(dFim.getDate() - (diaSemanaHoje === 0 ? 6 : diaSemanaHoje - 1));
-        const inicioStr = dInicioSemana.toISOString().slice(0, 10);
-        const fimStr = dFim.toISOString().slice(0, 10);
-
-        const gastoSemanaAtual = arredondar(
-            state.data.despesas
-                .filter(d => !d.contaFixaId && d.dataIso && d.dataIso >= inicioStr && d.dataIso <= fimStr)
-                .reduce((acc, d) => acc + (parseFloat(d.valor) || 0), 0)
-        );
-
-        const baseCalculo = Math.max(0, recebido - contasFixasTotal);
-        const valorInicialSemana = arredondar((baseCalculo / diasRestantesNoMes) * diasProjecaoSemana);
-        const valorDisponivelSemana = arredondar(valorInicialSemana - gastoSemanaAtual);
+        if (!semanaObj) semanaObj = dadosSemanas.semanas[0];
 
         return {
-            inicial: isNaN(valorInicialSemana) ? 0 : valorInicialSemana,
-            gastoTotal: isNaN(gastoSemanaAtual) ? 0 : gastoSemanaAtual,
-            contasPagas: 0,
-            contasAPagar: 0,
-            outrosGastos: isNaN(gastoSemanaAtual) ? 0 : gastoSemanaAtual,
-            restante: isNaN(valorDisponivelSemana) ? 0 : valorDisponivelSemana
+            inicial: semanaObj.recebido,
+            gastoTotal: semanaObj.gastoTotal,
+            contasSemana: semanaObj.contasSemana,
+            contasPagasSemana: semanaObj.contasPagasSemana,
+            contasAPagarSemana: semanaObj.contasAPagarSemana,
+            somaContas: semanaObj.somaContas,
+            somaContasPagas: semanaObj.somaContasPagas,
+            somaContasAPagar: semanaObj.somaContasAPagar,
+            gastoAvulso: semanaObj.gastoAvulso,
+            restante: semanaObj.restante,
+            numeroSemana: semanaObj.numero
         };
     }
 }
 
 function toggleGastoDetalhes() {
-    if (state.summaryType === 'mes') {
-        state.gastoDetalhesAberto = !state.gastoDetalhesAberto;
-        render();
-    }
+    state.gastoDetalhesAberto = !state.gastoDetalhesAberto;
+    render();
 }
 
 function renderSummary() {
@@ -790,26 +1119,77 @@ function renderSummary() {
     
     let htmlDetalhesGasto = '';
     if (state.summaryType === 'mes' && state.gastoDetalhesAberto) {
+        let htmlContasPagasLista = '';
+        if (res.contasPagasMes && res.contasPagasMes.length > 0) {
+            res.contasPagasMes.forEach(cs => {
+                const diaExibir = cs.diaPagamento || cs.diaVencimento;
+                htmlContasPagasLista += `<div style="display: flex; justify-content: space-between; font-size: 15px; color: #475569; padding-left: 10px;"><span>- ${cs.descricao} (Dia ${diaExibir}):</span> <strong style="color: #065f46;">${fmtMoeda(cs.valor)}</strong></div>`;
+            });
+        }
+
+        let htmlContasAPagarLista = '';
+        if (res.contasAPagarMes && res.contasAPagarMes.length > 0) {
+            res.contasAPagarMes.forEach(cs => {
+                htmlContasAPagarLista += `<div style="display: flex; justify-content: space-between; font-size: 15px; color: #475569; padding-left: 10px;"><span>- ${cs.descricao} (Dia ${cs.diaVencimento}):</span> <strong style="color: #c2410c;">${fmtMoeda(cs.valor)}</strong></div>`;
+            });
+        }
+
         htmlDetalhesGasto = `
             <div style="margin-top: 12px; padding-left: 12px; border-left: 4px solid #f87171; display: flex; flex-direction: column; gap: 8px; text-align: left;">
                 <div style="display: flex; justify-content: space-between; font-size: 16px; color: #475569; font-weight: bold;">
-                    <span>• Contas já pagas:</span>
+                    <span>• Contas pagas:</span>
                     <strong style="color: #065f46;">${fmtMoeda(res.contasPagas)}</strong>
                 </div>
-                <div style="display: flex; justify-content: space-between; font-size: 16px; color: #475569; font-weight: bold;">
+                ${htmlContasPagasLista}
+                <div style="display: flex; justify-content: space-between; font-size: 16px; color: #475569; font-weight: bold; margin-top: 2px;">
                     <span>• Contas a pagar:</span>
                     <strong style="color: #c2410c;">${fmtMoeda(res.contasAPagar)}</strong>
                 </div>
-                <div style="display: flex; justify-content: space-between; font-size: 16px; color: #475569; font-weight: bold;">
+                ${htmlContasAPagarLista}
+                <div style="display: flex; justify-content: space-between; font-size: 16px; color: #475569; font-weight: bold; margin-top: 4px;">
                     <span>• Outros Gastos:</span>
                     <strong style="color: #991b1b;">${fmtMoeda(res.outrosGastos)}</strong>
                 </div>
             </div>
         `;
+    } else if (state.summaryType === 'semana' && state.gastoDetalhesAberto) {
+        let htmlContasPagasLista = '';
+        if (res.contasPagasSemana && res.contasPagasSemana.length > 0) {
+            res.contasPagasSemana.forEach(cs => {
+                const diaExibir = cs.diaPagamento || cs.diaVencimento;
+                htmlContasPagasLista += `<div style="display: flex; justify-content: space-between; font-size: 15px; color: #475569; padding-left: 10px;"><span>- ${cs.descricao} (Dia ${diaExibir}):</span> <strong style="color: #065f46;">${fmtMoeda(cs.valor)}</strong></div>`;
+            });
+        }
+
+        let htmlContasAPagarLista = '';
+        if (res.contasAPagarSemana && res.contasAPagarSemana.length > 0) {
+            res.contasAPagarSemana.forEach(cs => {
+                htmlContasAPagarLista += `<div style="display: flex; justify-content: space-between; font-size: 15px; color: #475569; padding-left: 10px;"><span>- ${cs.descricao} (Dia ${cs.diaVencimento}):</span> <strong style="color: #c2410c;">${fmtMoeda(cs.valor)}</strong></div>`;
+            });
+        }
+
+        htmlDetalhesGasto = `
+            <div style="margin-top: 12px; padding-left: 12px; border-left: 4px solid #f87171; display: flex; flex-direction: column; gap: 8px; text-align: left;">
+                <div style="display: flex; justify-content: space-between; font-size: 16px; color: #475569; font-weight: bold;">
+                    <span>• Contas pagas:</span>
+                    <strong style="color: #065f46;">${fmtMoeda(res.somaContasPagas)}</strong>
+                </div>
+                ${htmlContasPagasLista}
+                <div style="display: flex; justify-content: space-between; font-size: 16px; color: #475569; font-weight: bold; margin-top: 2px;">
+                    <span>• Contas a pagar:</span>
+                    <strong style="color: #c2410c;">${fmtMoeda(res.somaContasAPagar)}</strong>
+                </div>
+                ${htmlContasAPagarLista}
+                <div style="display: flex; justify-content: space-between; font-size: 16px; color: #475569; font-weight: bold; margin-top: 4px;">
+                    <span>• Outros Gastos:</span>
+                    <strong style="color: #991b1b;">${fmtMoeda(res.gastoAvulso)}</strong>
+                </div>
+            </div>
+        `;
     }
 
-    const cursorGasto = state.summaryType === 'mes' ? 'cursor: pointer;' : '';
-    const dicaClique = state.summaryType === 'mes' ? `<div style="font-size: 14px; font-weight: bold; color: #047857; margin-top: 6px;">👉 (Toque para ${state.gastoDetalhesAberto ? 'recolher' : 'ver os detalhes'})</div>` : '';
+    const tituloDisponivel = state.summaryType === 'semana' ? `⭐ Valor Restante Até o Fim da Semana` : '⭐ Valor Restante Até o Fim do Mês';
+    const tituloGasto = state.summaryType === 'semana' ? `📤 Valor Gasto na Semana` : '📤 Valor Gasto No Mês';
 
     const [ano, mes] = state.selectedYearMonth.split('-').map(Number);
     const hoje = new Date();
@@ -821,21 +1201,21 @@ function renderSummary() {
             ${renderHeaderMesFixo()}
 
             <div class="summary-box">
-                <div class="summary-title" style="color: #334155;">${state.summaryType === 'semana' ? '⭐ Disponível até domingo' : '⭐ Valor Restante'}</div>
+                <div class="summary-title" style="color: #334155;">${tituloDisponivel}</div>
                 <div class="summary-value" style="color: ${res.restante < 0 ? '#991b1b' : '#1e293b'};">${fmtMoeda(res.restante)}</div>
             </div>
 
-            <div class="summary-box" style="${cursorGasto}" onclick="toggleGastoDetalhes()">
+            <div class="summary-box" style="cursor: pointer;" onclick="toggleGastoDetalhes()">
                 <div class="summary-title">
-                    ${state.summaryType === 'semana' ? '📤 Valor Gasto (nesta semana)' : '📤 Valor Gasto Total'}
-                    ${dicaClique}
+                    ${tituloGasto}
+                    <div style="font-size: 14px; font-weight: bold; color: #047857; margin-top: 6px;">👉 (Toque para ${state.gastoDetalhesAberto ? 'recolher' : 'ver os detalhes'})</div>
                 </div>
                 <div class="summary-value" style="color: #991b1b; font-weight: bold;">${fmtMoeda(res.gastoTotal)}</div>
                 ${htmlDetalhesGasto}
             </div>
 
             <div class="summary-box">
-                <div class="summary-title">💵 Valor Inicial (Recebido)</div>
+                <div class="summary-title">💵 Valor Inicial ${state.summaryType === 'semana' ? 'da Semana' : 'do Mês'}</div>
                 <div class="summary-value" style="color: #1e293b; font-weight: bold;">${fmtMoeda(res.inicial)}</div>
             </div>
 
@@ -870,10 +1250,10 @@ function renderSuccess() {
 function obterItensCronologicos() {
     let itens = [];
     state.data.receitas.filter(r => r.dataIso && r.dataIso.startsWith(state.selectedYearMonth)).forEach(r => {
-        itens.push({ data: r.dataIso, tipo: 'Recebido', desc: r.descricao, valor: parseFloat(r.valor) || 0 });
+        itens.push({ data: r.dataIso, tipo: 'Recebido', categoria: '', desc: r.descricao, valor: parseFloat(r.valor) || 0 });
     });
     state.data.despesas.filter(d => d.dataIso && d.dataIso.startsWith(state.selectedYearMonth)).forEach(d => {
-        itens.push({ data: d.dataIso, tipo: 'Gasto', desc: d.descricao, valor: parseFloat(d.valor) || 0 });
+        itens.push({ data: d.dataIso, tipo: 'Gasto', categoria: d.categoria || '', desc: d.descricao, valor: parseFloat(d.valor) || 0 });
     });
     state.data.contasFixas.forEach(c => {
         const inicioOk = c.mesInicioIso <= state.selectedYearMonth;
@@ -887,10 +1267,53 @@ function obterItensCronologicos() {
                 dataItem = pagamentoInfo.dataIso;
             }
 
-            itens.push({ data: dataItem, tipo: 'Conta Fixa', desc: c.descricao, valor: parseFloat(valorEfetivo) || 0 });
+            itens.push({ data: dataItem, tipo: 'Conta Fixa', categoria: '', desc: c.descricao, valor: parseFloat(valorEfetivo) || 0 });
         }
     });
     return itens.sort((a,b) => a.data.localeCompare(b.data));
+}
+
+function obterTotaisPorCategoria() {
+    const totais = [];
+
+    let totalContasFixas = 0;
+    state.data.contasFixas.forEach(c => {
+        const inicioOk = c.mesInicioIso <= state.selectedYearMonth;
+        const fimOk = !c.mesFimIso || c.mesFimIso >= state.selectedYearMonth;
+        if (!inicioOk || !fimOk) return;
+
+        const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
+        const val = (pagamentoInfo !== undefined && pagamentoInfo.valor !== undefined)
+            ? (parseFloat(pagamentoInfo.valor) || 0)
+            : (parseFloat(c.valorMedio) || 0);
+        totalContasFixas += val;
+    });
+    totalContasFixas = arredondar(totalContasFixas);
+    if (totalContasFixas > 0) {
+        totais.push({ categoria: 'Contas Fixas', total: totalContasFixas });
+    }
+
+    const mapaCategorias = {};
+    state.data.despesas
+        .filter(d => d.dataIso && d.dataIso.startsWith(state.selectedYearMonth))
+        .forEach(d => {
+            const cat = (d.categoria && d.categoria.trim()) ? d.categoria.trim() : 'Sem categoria';
+            mapaCategorias[cat] = arredondar((mapaCategorias[cat] || 0) + (parseFloat(d.valor) || 0));
+        });
+
+    Object.keys(mapaCategorias)
+        .sort((a, b) => {
+            if (a === 'Sem categoria') return 1;
+            if (b === 'Sem categoria') return -1;
+            return mapaCategorias[b] - mapaCategorias[a];
+        })
+        .forEach(cat => {
+            if (mapaCategorias[cat] > 0) {
+                totais.push({ categoria: cat, total: mapaCategorias[cat] });
+            }
+        });
+
+    return totais;
 }
 
 function abrirMenuOpcoes() {
@@ -903,6 +1326,7 @@ function abrirMenuOpcoes() {
             
             <button class="btn-primary" style="margin-top:0; font-size: 18px;" onclick="this.parentElement.parentElement.remove(); baixarBackupManualJson();">💾 Baixar Backup Atual</button>
             <button class="btn-secondary" style="margin-top:0; border-color: #047857; color: #047857; font-size: 18px;" onclick="this.parentElement.parentElement.remove(); abrirOpcoesExportacao();">📤 Compartilhar Resumo</button>
+            <button class="btn-secondary" style="margin-top:0; border-color: #6b21a8; color: #6b21a8; font-size: 18px;" onclick="this.parentElement.parentElement.remove(); compartilharChangelog();">📋 Compartilhar Changelog</button>
             <button class="btn-secondary" style="margin-top:0; border-color: #047857; color: #047857; font-size: 18px;" onclick="this.parentElement.parentElement.remove(); acionarImportacaoCsv();">📥 Importar Dados (CSV)</button>
             <button class="btn-secondary" style="margin-top:0; border-color: #1d4ed8; color: #1d4ed8; font-size: 18px;" onclick="this.parentElement.parentElement.remove(); acionarRestauracaoJson();">🔄 Restaurar Backup</button>
             
@@ -910,6 +1334,40 @@ function abrirMenuOpcoes() {
         </div>
     `;
     document.body.appendChild(modal);
+}
+
+function compartilharChangelog() {
+    const logs = Array.isArray(state.data.changelog) ? state.data.changelog : [];
+    let txt = `📋 *CHANGELOG - MEUS GASTOS*\n\n`;
+
+    if (logs.length === 0) {
+        txt += `Nenhuma alteração registrada até o momento.\n`;
+    } else {
+        logs.forEach(item => {
+            const dt = new Date(item.timestamp);
+            const dataHoraFmt = isNaN(dt.getTime())
+                ? item.timestamp
+                : `${dt.toLocaleDateString('pt-BR')} ${dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+
+            let refFmt = '';
+            if (item.dataRef) {
+                const partes = item.dataRef.split('-');
+                refFmt = partes.length === 3 ? ` | Ref: ${partes[2]}/${partes[1]}/${partes[0]}` : ` | Ref: ${item.dataRef}`;
+            }
+
+            const extraFmt = item.detalheExtra ? ` (${item.detalheExtra})` : '';
+            const icone = item.acao === 'Removido' ? '➖' : '➕';
+
+            txt += `${icone} [${dataHoraFmt}] *${item.acao}* (${item.categoria}): ${item.descricao} - *${fmtMoeda(item.valor)}*${refFmt}${extraFmt}\n`;
+        });
+    }
+
+    if (navigator.share) {
+        navigator.share({ title: 'Changelog - Meus Gastos', text: txt }).catch(() => {});
+    } else {
+        navigator.clipboard.writeText(txt);
+        alert('Changelog copiado para a área de transferência!');
+    }
 }
 
 function abrirOpcoesExportacao() {
@@ -935,6 +1393,8 @@ function exportarTextoWhatsApp() {
 
     const nomeMesFormatado = formatarNomeMes(state.selectedYearMonth);
     const itens = obterItensCronologicos();
+    const totaisCat = obterTotaisPorCategoria();
+
     let txt = `📊 *RESUMO DE GASTOS - ${nomeMesFormatado}*\n`;
     txt += `• Valor Inicial: ${fmtMoeda(res.inicial)}\n`;
     txt += `• Valor Gasto (Total): ${fmtMoeda(res.gastoTotal)}\n`;
@@ -942,14 +1402,25 @@ function exportarTextoWhatsApp() {
     txt += `  - Contas a pagar: ${fmtMoeda(res.contasAPagar)}\n`;
     txt += `  - Outros Gastos: ${fmtMoeda(res.outrosGastos)}\n`;
     txt += `• *Valor Restante: ${fmtMoeda(res.restante)}*\n\n`;
-    txt += `📅 *EXTRATO CRONOLÓGICO:*\n`;
 
+    txt += `📂 *GASTOS POR CATEGORIA:*\n`;
+    if (totaisCat.length === 0) {
+        txt += `Nenhum gasto registrado neste mês.\n\n`;
+    } else {
+        totaisCat.forEach(item => {
+            txt += `• ${item.categoria}: ${fmtMoeda(item.total)}\n`;
+        });
+        txt += `\n`;
+    }
+
+    txt += `📅 *EXTRATO CRONOLÓGICO:*\n`;
     if (itens.length === 0) txt += `Nenhum lançamento neste mês.\n`;
     itens.forEach(i => {
         const [ano, mes, dia] = i.data.split('-');
         const dataFmt = `${dia}/${mes}/${ano}`;
         const sinal = i.tipo === 'Recebido' ? '+' : '-';
-        txt += `${dataFmt} | ${i.tipo}: ${i.desc} (${sinal}${fmtMoeda(i.valor)})\n`;
+        const catFmt = i.categoria ? ` [${i.categoria}]` : '';
+        txt += `${dataFmt} | ${i.tipo}${catFmt}: ${i.desc} (${sinal}${fmtMoeda(i.valor)})\n`;
     });
 
     if (navigator.share) {
@@ -962,14 +1433,24 @@ function exportarTextoWhatsApp() {
 
 function exportarExcelCsv() {
     const itens = obterItensCronologicos();
-    let csv = "\uFEFFData;Tipo;Descricao;Valor (R$)\n";
+    const totaisCat = obterTotaisPorCategoria();
+
+    let csv = "\uFEFFData;Tipo;Categoria;Descricao;Valor (R$)\n";
     itens.forEach(i => {
         const [ano, mes, dia] = i.data.split('-');
         const dataFmt = `${dia}/${mes}/${ano}`;
         const sinal = i.tipo === 'Recebido' ? '' : '-';
         const valStr = i.valor.toFixed(2).replace('.', ',');
-        csv += `${dataFmt};${i.tipo};${i.desc};${sinal}${valStr}\n`;
+        csv += `${dataFmt};${i.tipo};${i.categoria || ''};${i.desc};${sinal}${valStr}\n`;
     });
+
+    if (totaisCat.length > 0) {
+        csv += `\nTOTAL POR CATEGORIA;Valor (R$)\n`;
+        totaisCat.forEach(item => {
+            const valStr = item.total.toFixed(2).replace('.', ',');
+            csv += `${item.categoria};${valStr}\n`;
+        });
+    }
 
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const file = new File([blob], `Gastos_${state.selectedYearMonth}.csv`, { type: 'text/csv' });
@@ -1007,8 +1488,10 @@ function processarArquivoCsv(event) {
 
                 const dataBr = colunas[0].trim();
                 const tipo = colunas[1].trim();
-                const descricao = colunas[2].trim();
-                let valorStr = colunas[3].trim();
+                const temColunaCategoria = colunas.length >= 5;
+                const categoria = temColunaCategoria ? colunas[2].trim() : '';
+                const descricao = (temColunaCategoria ? colunas[3] : colunas[2]).trim();
+                let valorStr = (temColunaCategoria ? colunas[4] : colunas[3]).trim();
 
                 const partesData = dataBr.split('/');
                 if (partesData.length !== 3) continue;
@@ -1021,9 +1504,12 @@ function processarArquivoCsv(event) {
 
                 if (tipo.toLowerCase().includes('recebido')) {
                     state.data.receitas.push({ id: crypto.randomUUID(), descricao: descricao, valor: valor, dataIso: dataIso });
+                    registrarChangelog('Adicionado', 'Recebido', descricao, valor, dataIso, 'Importação CSV');
                     importadosCount++;
                 } else if (tipo.toLowerCase().includes('gasto')) {
-                    state.data.despesas.push({ id: crypto.randomUUID(), descricao: descricao, valor: valor, dataIso: dataIso, formaPagamento: 'Outros' });
+                    state.data.despesas.push({ id: crypto.randomUUID(), descricao: descricao, valor: valor, dataIso: dataIso, categoria: categoria, formaPagamento: 'Outros' });
+                    const detalhesLog = [categoria, 'Importação CSV'].filter(Boolean).join(' • ');
+                    registrarChangelog('Adicionado', 'Gasto', descricao, valor, dataIso, detalhesLog);
                     importadosCount++;
                 }
             }
@@ -1052,9 +1538,15 @@ function processarRestauracaoJson(event) {
             const dadosRestaurados = JSON.parse(conteudo);
 
             if (dadosRestaurados && (dadosRestaurados.receitas || dadosRestaurados.despesas || dadosRestaurados.contasFixas)) {
-                state.data = dadosRestaurados;
+                state.data = {
+                    receitas: Array.isArray(dadosRestaurados.receitas) ? dadosRestaurados.receitas : [],
+                    despesas: Array.isArray(dadosRestaurados.despesas) ? dadosRestaurados.despesas : [],
+                    contasFixas: Array.isArray(dadosRestaurados.contasFixas) ? dadosRestaurados.contasFixas : [],
+                    pagamentosContas: (dadosRestaurados.pagamentosContas && typeof dadosRestaurados.pagamentosContas === 'object') ? dadosRestaurados.pagamentosContas : {},
+                    changelog: Array.isArray(dadosRestaurados.changelog) ? dadosRestaurados.changelog : []
+                };
                 saveData();
-                alert('Backup restaurado com sucesso! Todos os dados foram recuperados.');
+                alert('Backup restaurado com sucesso! Todos os dados e o changelog foram recuperados.');
                 render();
             } else {
                 alert('O arquivo selecionado não parece ser um backup válido.');
