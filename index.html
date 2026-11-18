@@ -31,7 +31,8 @@
         .form-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 24px; gap: 16px; }
         .btn-salvar-direito { background: #2E7D32; color: white; border: none; border-radius: 12px; padding: 14px 28px; font-size: 18px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
         
-        input { width: 100%; padding: 14px; font-size: 18px; border: 2px solid #ccc; border-radius: 12px; margin-top: 8px; margin-bottom: 20px; }
+        input { width: 100%; padding: 14px; font-size: 18px; border: 2px solid #ccc; border-radius: 12px; margin-top: 8px; margin-bottom: 20px; background-color: white; }
+        select { width: 100%; padding: 14px 40px 14px 14px; font-size: 18px; border: 2px solid #ccc; border-radius: 12px; margin-top: 8px; margin-bottom: 20px; background-color: white; appearance: none; -webkit-appearance: none; -moz-appearance: none; background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.364%22%20height%3D%22292.364%22%3E%3Cpath%20fill%3D%22%23333333%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E"); background-repeat: no-repeat; background-position: right 14px center; background-size: 12px auto; }
         label { font-size: 18px; font-weight: bold; display: block; text-align: left; }
         
         .success-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; flex-grow: 1; text-align: center; }
@@ -92,7 +93,7 @@
             const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(state.data, null, 2));
             const downloadAnchor = document.createElement('a');
             downloadAnchor.setAttribute("href", dataStr);
-            downloadAnchor.setAttribute("download", "meu_backup_gastos.json"); // Arquivo único e fixo
+            downloadAnchor.setAttribute("download", "meu_backup_gastos.json");
             document.body.appendChild(downloadAnchor);
             downloadAnchor.click();
             downloadAnchor.remove();
@@ -321,10 +322,11 @@
         const despesasMes = state.data.despesas.filter(d => !d.contaFixaId && d.dataIso.startsWith(state.selectedYearMonth));
 
         despesasMes.forEach(d => {
+            const formaPgtoTxt = d.formaPagamento ? ` • ${d.formaPagamento}` : '';
             htmlDespesas += `
                 <div class="list-item">
                     <div style="flex-grow: 1;">
-                        <strong>${d.descricao}</strong><br><small>Data: ${d.dataIso.split('-').reverse().join('/')}</small><br>
+                        <strong>${d.descricao}</strong><br><small>Data: ${d.dataIso.split('-').reverse().join('/')}${formaPgtoTxt}</small><br>
                         <span style="color: #C62828; font-weight: bold;">${fmtMoeda(d.valor)}</span>
                     </div>
                     <button class="btn-danger" style="width: auto; padding: 8px 12px; font-size: 14px; height: auto;" onclick="excluirDespesa('${d.id}')">Excluir</button>
@@ -339,6 +341,13 @@
                 <input type="number" step="0.01" id="val-desp" placeholder="0,00">
                 <label>Com o quê?</label>
                 <input type="text" id="desc-desp" placeholder="Ex: Mercado, Padaria...">
+                <label>Forma de pagamento</label>
+                <select id="forma-pagamento-desp">
+                    <option value="Cartao de Credito">Cartão de Crédito</option>
+                    <option value="Cartao de Debito">Cartão de Débito</option>
+                    <option value="Pix">Pix</option>
+                    <option value="Dinheiro">Dinheiro</option>
+                </select>
                 <label>Data</label>
                 <input type="date" id="data-desp" max="${hojeIso()}" value="${hojeIso()}">
                 
@@ -349,7 +358,7 @@
 
                 <hr style="margin: 20px 0;">
                 <h3 style="margin-bottom: 12px;">Gastos desse mes:</h3>
-                <div style="max-height: 35vh; overflow-y: auto;">
+                <div style="max-height: 28vh; overflow-y: auto;">
                     ${htmlDespesas || '<p style="color:#777">Nenhum gasto cadastrado neste mês.</p>'}
                 </div>
             </div>
@@ -361,12 +370,19 @@
     function salvarDespesa() {
         const val = parseFloat(document.getElementById('val-desp').value.replace(',', '.'));
         const desc = document.getElementById('desc-desp').value.trim();
+        const formaPagamento = document.getElementById('forma-pagamento-desp').value;
         const data = document.getElementById('data-desp').value;
         
         if (!desc || isNaN(val) || val <= 0 || !data) { alert('Preencha todos os campos corretamente!'); return; }
         if (data > hojeIso()) { alert('Não é permitido registrar gastos com data no futuro!'); return; }
 
-        state.data.despesas.push({ id: crypto.randomUUID(), descricao: desc, valor: val, dataIso: data });
+        state.data.despesas.push({ 
+            id: crypto.randomUUID(), 
+            descricao: desc, 
+            valor: val, 
+            dataIso: data,
+            formaPagamento: formaPagamento 
+        });
         saveData();
         state.currentScreen = 'success';
         state.successMessage = 'gasto';
@@ -709,7 +725,7 @@
             itens.push({ data: r.dataIso, tipo: 'Recebido', desc: r.descricao, valor: r.valor });
         });
         state.data.despesas.filter(d => d.dataIso.startsWith(state.selectedYearMonth)).forEach(d => {
-            itens.push({ data: r.dataIso, tipo: 'Gasto', desc: d.descricao, valor: d.valor });
+            itens.push({ data: d.dataIso, tipo: 'Gasto', desc: d.descricao, valor: d.valor });
         });
         state.data.contasFixas.forEach(c => {
             const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
@@ -753,7 +769,7 @@
                 <p style="margin: 12px 0; color:#666; font-size:15px;">Escolha o formato para enviar via WhatsApp ou outro app:</p>
                 <button class="btn-primary" onclick="exportarTextoWhatsApp(); document.body.lastChild.remove();">Mensagem de Texto (WhatsApp)</button>
                 <button class="btn-secondary" onclick="exportarExcelCsv(); document.body.lastChild.remove();">Planilha Excel (.CSV)</button>
-                <button class="fab-back" style="width:100%; margin-top:12px; justify-content:center;" onclick="this.parentElement.parentElement.remove()">Cancelar</button>
+                <button class="fab-back" style="width:100%; margin-top:12px; justify-content:center; text-align:center;" onclick="this.parentElement.parentElement.remove()">Cancelar</button>
             </div>
         `;
         document.body.appendChild(modal);
@@ -863,7 +879,8 @@
                             id: crypto.randomUUID(),
                             descricao: descricao,
                             valor: valor,
-                            dataIso: dataIso
+                            dataIso: dataIso,
+                            formaPagamento: 'Outros'
                         });
                         importadosCount++;
                     }
