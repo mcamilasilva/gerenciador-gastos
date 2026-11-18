@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meus Gastos</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1B5E20">
+    <style>
+        * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 0; }
+        body { background-color: #FAFAFA; color: #333; padding: 16px; display: flex; justify-content: center; }
+        .container { width: 100%; max-width: 480px; min-height: 90vh; display: flex; flex-direction: column; justify-content: space-between; }
+        
+        .card { background: white; border: 2px solid #ccc; border-radius: 16px; padding: 16px; text-align: center; }
+        .grid-2x2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+        .big-btn { height: 140px; border: 2px solid #333; border-radius: 16px; background: white; font-size: 20px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; text-align: center; padding: 8px; }
+        .big-btn:active { background: #f0f0f0; }
+        
+        .btn-primary { width: 100%; height: 56px; background: #1B5E20; color: white; border: none; border-radius: 12px; font-size: 18px; font-weight: bold; cursor: pointer; margin-top: 12px; }
+        .btn-secondary { width: 100%; height: 56px; background: white; color: #333; border: 2px solid #1B5E20; border-radius: 12px; font-size: 18px; font-weight: bold; cursor: pointer; margin-top: 8px; }
+        .fab-back { background: none; border: 2px solid #ccc; border-radius: 12px; padding: 8px 16px; font-size: 16px; cursor: pointer; margin-bottom: 16px; display: inline-flex; align-items: center; gap: 8px; }
+        .fab-check { width: 72px; height: 72px; background: #1B5E20; color: white; border: none; border-radius: 50%; font-size: 32px; cursor: pointer; display: flex; align-items: center; justify-content: center; align-self: flex-end; box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
+        
+        input { width: 100%; padding: 14px; font-size: 18px; border: 2px solid #ccc; border-radius: 12px; margin-top: 8px; margin-bottom: 20px; }
+        label { font-size: 18px; font-weight: bold; display: block; text-align: left; }
+        
+        .success-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 80vh; text-align: center; cursor: pointer; }
+        .check-circle { width: 120px; height: 120px; border: 4px solid #2E7D32; background: #E8F5E9; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 64px; color: #2E7D32; margin-bottom: 24px; }
+        
+        .summary-box { border: 2px solid #888; border-radius: 12px; padding: 16px; background: white; margin-bottom: 16px; text-align: left; }
+        .summary-title { font-size: 18px; font-weight: 600; color: #555; }
+        .summary-value { font-size: 26px; font-weight: bold; margin-top: 6px; }
+        
+        .alert-box { background: #FFF8E1; border: 1px solid #FFB300; padding: 12px; border-radius: 8px; font-size: 15px; color: #5D4037; margin-bottom: 16px; }
+        .list-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 8px; background: white; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<div class="container" id="app"></div>
+
+<script>
+    // Registrar Service Worker para funcionamento offline e instalação PWA
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./sw.js').catch(() => {});
+    }
+
+    let state = {
+        currentScreen: 'home',
+        selectedYearMonth: new Date().toISOString().slice(0, 7),
+        data: loadData(),
+        summaryType: 'mes',
+        successMessage: 'salvo',
+        activeContaParaPagar: null
+    };
+
+    function loadData() {
+        const saved = localStorage.getItem('meus_gastos_data');
+        if (saved) return JSON.parse(saved);
+        return { receitas: [], despesas: [], contasFixas: [], pagamentosContas: {} };
+    }
+
+    function saveData() {
+        localStorage.setItem('meus_gastos_data', JSON.stringify(state.data));
+    }
+
+    const fmtMoeda = (val) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
+
+    function render() {
+        const app = document.getElementById('app');
+        app.innerHTML = '';
+
+        verificarContasVencendoHoje();
+
+        switch (state.currentScreen) {
+            case 'home': app.appendChild(renderHome()); break;
+            case 'rec': app.appendChild(renderFormReceita()); break;
+            case 'desp': app.appendChild(renderFormDespesa()); break;
+            case 'conta': app.appendChild(renderFormContaFixa()); break;
+            case 'period': app.appendChild(renderChoosePeriod()); break;
+            case 'summary': app.appendChild(renderSummary()); break;
+            case 'success': app.appendChild(renderSuccess()); break;
+            case 'confirm-pagamento': app.appendChild(renderConfirmPagamento()); break;
+        }
+    }
+
+    function renderHome() {
+        const div = document.createElement('div');
+        const [ano, mes] = state.selectedYearMonth.split('-');
+        const dataRef = new Date(ano, mes - 1, 1);
+        const nomeMes = dataRef.toLocaleString('pt-BR', { month: 'long', year: 'numeric' });
+
+        div.innerHTML = `
+            <div>
+                <div class="card" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                    <button class="fab-back" style="margin:0; padding:8px 12px;" onclick="mudarMes(-1)">◀</button>
+                    <span style="font-size: 20px; font-weight: bold; text-transform: capitalize;">${nomeMes}</span>
+                    <button class="fab-back" style="margin:0; padding:8px 12px;" onclick="mudarMes(1)">▶</button>
+                </div>
+
+                <div class="alert-box" id="aviso-vencimento-hoje" style="display:none;"></div>
+
+                <div class="grid-2x2">
+                    <button class="big-btn" onclick="navegar('rec')">Valor<br>Recebido</button>
+                    <button class="big-btn" onclick="navegar('desp')">Valor<br>Gasto</button>
+                </div>
+                <div class="grid-2x2">
+                    <button class="big-btn" onclick="navegar('period')">Valor<br>Restante</button>
+                    <button class="big-btn" onclick="navegar('conta')">Contas<br>Fixas</button>
+                </div>
+            </div>
+
+            <button class="btn-secondary" style="height: 64px; display: flex; align-items: center; justify-content: center; gap: 8px;" onclick="abrirOpcoesExportacao()">
+                📤 Compartilhar / Exportar
+            </button>
+        `;
+        return div;
+    }
+
+    function mudarMes(delta) {
+        let [ano, mes] = state.selectedYearMonth.split('-').map(Number);
+        mes += delta;
+        if (mes > 12) { mes = 1; ano++; }
+        if (mes < 1) { mes = 12; ano--; }
+        state.selectedYearMonth = `${ano}-${String(mes).padStart(2, '0')}`;
+        render();
+    }
+
+    function navegar(tela) { state.currentScreen = tela; render(); }
+
+    function renderFormReceita() {
+        const div = document.createElement('div');
+        div.innerHTML = `
+            <div>
+                <button class="fab-back" onclick="navegar('home')">← Voltar</button>
+                <label>Recebeu do quê?</label>
+                <input type="text" id="desc-rec" placeholder="Ex: Salário, Aposentadoria...">
+                <label>Valor recebido (R$)</label>
+                <input type="number" step="0.01" id="val-rec" placeholder="0,00">
+                <label>Data recebimento</label>
+                <input type="date" id="data-rec" value="${new Date().toISOString().slice(0,10)}">
+            </div>
+            <button class="fab-check" onclick="salvarReceita()">✓</button>
+        `;
+        return div;
+    }
+
+    function salvarReceita() {
+        const desc = document.getElementById('desc-rec').value.trim();
+        const val = parseFloat(document.getElementById('val-rec').value.replace(',', '.'));
+        const data = document.getElementById('data-rec').value;
+        if (!desc || isNaN(val) || val <= 0 || !data) { alert('Preencha todos os campos corretamente!'); return; }
+
+        state.data.receitas.push({ id: crypto.randomUUID(), descricao: desc, valor: val, dataIso: data });
+        saveData();
+        state.currentScreen = 'success';
+        state.successMessage = 'recebimento';
+        render();
+    }
+
+    function renderFormDespesa() {
+        const div = document.createElement('div');
+        div.innerHTML = `
+            <div>
+                <button class="fab-back" onclick="navegar('home')">← Voltar</button>
+                <label>Gastou quanto? (R$)</label>
+                <input type="number" step="0.01" id="val-desp" placeholder="0,00">
+                <label>Com o quê?</label>
+                <input type="text" id="desc-desp" placeholder="Ex: Mercado, Padaria...">
+                <label>Data</label>
+                <input type="date" id="data-desp" value="${new Date().toISOString().slice(0,10)}">
+            </div>
+            <button class="fab-check" onclick="salvarDespesa()">✓</button>
+        `;
+        return div;
+    }
+
+    function salvarDespesa() {
+        const val = parseFloat(document.getElementById('val-desp').value.replace(',', '.'));
+        const desc = document.getElementById('desc-desp').value.trim();
+        const data = document.getElementById('data-desp').value;
+        if (!desc || isNaN(val) || val <= 0 || !data) { alert('Preencha todos os campos corretamente!'); return; }
+
+        state.data.despesas.push({ id: crypto.randomUUID(), descricao: desc, valor: val, dataIso: data });
+        saveData();
+        state.currentScreen = 'success';
+        state.successMessage = 'gasto';
+        render();
+    }
+
+    function renderFormContaFixa() {
+        const div = document.createElement('div');
+        let htmlContas = '';
+        
+        state.data.contasFixas.forEach(c => {
+            htmlContas += `
+                <div class="list-item" onclick="pedirBaixaConta('${c.id}')">
+                    <div><strong>${c.descricao}</strong><br><small>Vencimento dia ${c.diaVencimento}</small></div>
+                    <div style="font-weight:bold;">${fmtMoeda(c.valorMedio)}</div>
+                </div>
+            `;
+        });
+
+        div.innerHTML = `
+            <div style="overflow-y: auto; max-height: 85vh;">
+                <button class="fab-back" onclick="navegar('home')">← Voltar</button>
+                <label>Conta de quê?</label>
+                <input type="text" id="desc-conta" placeholder="Ex: Luz, Aluguel, Internet...">
+                <label>Valor médio (R$)</label>
+                <input type="number" step="0.01" id="val-conta" placeholder="0,00">
+                <label>Data vencimento</label>
+                <input type="date" id="data-conta" value="${new Date().toISOString().slice(0,10)}">
+                
+                <button class="btn-primary" onclick="salvarContaFixa()">✓ Salvar Nova Conta Fixa</button>
+
+                <hr style="margin: 20px 0;">
+                <h3 style="margin-bottom: 12px;">Contas cadastradas (toque para pagar):</h3>
+                ${htmlContas || '<p style="color:#777">Nenhuma conta cadastrada.</p>'}
+            </div>
+        `;
+        return div;
+    }
+
+    function salvarContaFixa() {
+        const desc = document.getElementById('desc-conta').value.trim();
+        const val = parseFloat(document.getElementById('val-conta').value.replace(',', '.'));
+        const dataStr = document.getElementById('data-conta').value;
+        if (!desc || isNaN(val) || val <= 0 || !dataStr) { alert('Preencha os campos!'); return; }
+
+        const diaVenc = new Date(dataStr + 'T00:00:00').getDate();
+        state.data.contasFixas.push({
+            id: crypto.randomUUID(),
+            descricao: desc,
+            valorMedio: val,
+            diaVencimento: diaVenc,
+            mesInicioIso: state.selectedYearMonth
+        });
+        saveData();
+        state.currentScreen = 'success';
+        state.successMessage = 'conta';
+        render();
+    }
+
+    function pedirBaixaConta(id) {
+        state.activeContaParaPagar = state.data.contasFixas.find(c => c.id === id);
+        state.currentScreen = 'confirm-pagamento';
+        render();
+    }
+
+    function renderConfirmPagamento() {
+        const c = state.activeContaParaPagar;
+        const div = document.createElement('div');
+        div.innerHTML = `
+            <div>
+                <button class="fab-back" onclick="navegar('conta')">← Voltar</button>
+                <h2>Pagar conta: ${c.descricao}</h2>
+                <label style="margin-top:20px;">Confirme ou ajuste o valor real pago:</label>
+                <input type="number" step="0.01" id="val-real-pago" value="${c.valorMedio}">
+            </div>
+            <button class="btn-primary" onclick="confirmarPagamentoReal()">✓ Confirmar Pagamento</button>
+        `;
+        return div;
+    }
+
+    function confirmarPagamentoReal() {
+        const valReal = parseFloat(document.getElementById('val-real-pago').value.replace(',', '.'));
+        if (isNaN(valReal) || valReal <= 0) { alert('Valor inválido'); return; }
+
+        const c = state.activeContaParaPagar;
+        const [ano, mes] = state.selectedYearMonth.split('-').map(Number);
+        const diaValido = Math.min(c.diaVencimento, new Date(ano, mes, 0).getDate());
+        const dataIso = `${state.selectedYearMonth}-${String(diaValido).padStart(2,'0')}`;
+
+        state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`] = valReal;
+        
+        state.data.despesas = state.data.despesas.filter(d => !(d.contaFixaId === c.id && d.dataIso.startsWith(state.selectedYearMonth)));
+        state.data.despesas.push({
+            id: crypto.randomUUID(),
+            descricao: `${c.descricao} (Conta Fixa)`,
+            valor: valReal,
+            dataIso: dataIso,
+            contaFixaId: c.id
+        });
+
+        saveData();
+        state.currentScreen = 'success';
+        state.successMessage = 'pagamento';
+        render();
+    }
+
+    function renderChoosePeriod() {
+        const div = document.createElement('div');
+        div.innerHTML = `
+            <div>
+                <button class="fab-back" onclick="navegar('home')">← Voltar</button>
+                <h2 style="text-align: center; margin-top: 40px; font-size: 26px;">Na semana ou no mês?</h2>
+                <div style="margin-top: 50px; display: flex; flex-direction: column; gap: 20px;">
+                    <button class="big-btn" style="height: 80px;" onclick="escolherPeriodo('semana')">SEMANA</button>
+                    <button class="big-btn" style="height: 80px;" onclick="escolherPeriodo('mes')">MÊS</button>
+                </div>
+            </div>
+        `;
+        return div;
+    }
+
+    function escolherPeriodo(tipo) {
+        state.summaryType = tipo;
+        state.currentScreen = 'summary';
+        render();
+    }
+
+    function calcularResumo() {
+        const [ano, mes] = state.selectedYearMonth.split('-').map(Number);
+        const diasNoMes = new Date(ano, mes, 0).getDate();
+
+        const recebido = state.data.receitas
+            .filter(r => r.dataIso.startsWith(state.selectedYearMonth))
+            .reduce((acc, r) => acc + r.valor, 0);
+
+        const contasFixasTotal = state.data.contasFixas
+            .filter(c => c.mesInicioIso <= state.selectedYearMonth)
+            .reduce((acc, c) => {
+                const pago = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
+                return acc + (pago !== undefined ? pago : c.valorMedio);
+            }, 0);
+
+        if (state.summaryType === 'mes') {
+            const avulsas = state.data.despesas
+                .filter(d => !d.contaFixaId && d.dataIso.startsWith(state.selectedYearMonth))
+                .reduce((acc, d) => acc + d.valor, 0);
+            
+            const gastoTotal = contasFixasTotal + avulsas;
+            return {
+                inicial: recebido,
+                gasto: gastoTotal,
+                restante: recebido - gastoTotal,
+                aviso: null
+            };
+        } else {
+            const hoje = new Date();
+            const refDate = (hoje.toISOString().slice(0,7) === state.selectedYearMonth) ? hoje : new Date(ano, mes - 1, 1);
+            
+            const diaSemana = refDate.getDay() === 0 ? 6 : refDate.getDay() - 1;
+            const inicioSemana = new Date(refDate); inicioSemana.setDate(refDate.getDate() - diaSemana);
+            const fimSemana = new Date(inicioSemana); fimSemana.setDate(inicioSemana.getDate() + 6);
+
+            const inicioNoMes = inicioSemana.toISOString().slice(0,7) < state.selectedYearMonth ? new Date(ano, mes - 1, 1) : inicioSemana;
+            const fimNoMes = fimSemana.toISOString().slice(0,7) > state.selectedYearMonth ? new Date(ano, mes, 0) : fimSemana;
+
+            const diasEstaSemanaNoMes = Math.round((fimNoMes - inicioNoMes) / (1000 * 60 * 60 * 24)) + 1;
+            
+            const livreMes = Math.max(0, recebido - contasFixasTotal);
+            const valorInicialSemana = (livreMes / diasNoMes) * diasEstaSemanaNoMes;
+
+            const inicioStr = inicioNoMes.toISOString().slice(0,10);
+            const fimStr = fimNoMes.toISOString().slice(0,10);
+
+            const gastoSemana = state.data.despesas
+                .filter(d => !d.contaFixaId && d.dataIso >= inicioStr && d.dataIso <= fimStr)
+                .reduce((acc, d) => acc + d.valor, 0);
+
+            let aviso = null;
+            if (fimSemana.toISOString().slice(0,7) !== state.selectedYearMonth) {
+                const diasSemanaNomes = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
+                const nomeDiaFim = diasSemanaNomes[fimNoMes.getDay()];
+                aviso = `Atenção: o mês termina na ${nomeDiaFim} desta semana (considerando ${diasEstaSemanaNoMes} ${diasEstaSemanaNoMes === 1 ? 'dia' : 'dias'}).`;
+            }
+
+            return {
+                inicial: valorInicialSemana,
+                gasto: gastoSemana,
+                restante: valorInicialSemana - gastoSemana,
+                aviso: aviso
+            };
+        }
+    }
+
+    function renderSummary() {
+        const res = calcularResumo();
+        const div = document.createElement('div');
+        div.innerHTML = `
+            <div>
+                <button class="fab-back" onclick="navegar('period')">← Voltar</button>
+                
+                ${res.aviso ? `<div class="alert-box">${res.aviso}</div>` : ''}
+
+                <div class="summary-box">
+                    <div class="summary-title">Valor Restante</div>
+                    <div class="summary-value" style="color: ${res.restante < 0 ? '#B71C1C' : '#1B5E20'}">${fmtMoeda(res.restante)}</div>
+                </div>
+
+                <div class="summary-box">
+                    <div class="summary-title">Valor Gasto</div>
+                    <div class="summary-value" style="color: #D32F2F; font-weight: normal;">${fmtMoeda(res.gasto)}</div>
+                </div>
+
+                <div class="summary-box">
+                    <div class="summary-title">Valor Inicial</div>
+                    <div class="summary-value" style="color: #000; font-weight: normal;">${fmtMoeda(res.inicial)}</div>
+                </div>
+            </div>
+            <div></div>
+        `;
+        return div;
+    }
+
+    function renderSuccess() {
+        const div = document.createElement('div');
+        div.innerHTML = `
+            <div class="success-screen" onclick="navegar('home')">
+                <div class="check-circle">✓</div>
+                <h2>Seu ${state.successMessage} foi salvo</h2>
+                <p style="color: #777; margin-top: 12px;">Toque em qualquer lugar para voltar</p>
+            </div>
+        `;
+        setTimeout(() => { if(state.currentScreen === 'success') navegar('home'); }, 2000);
+        return div;
+    }
+
+    function obterItensCronologicos() {
+        let itens = [];
+        state.data.receitas.filter(r => r.dataIso.startsWith(state.selectedYearMonth)).forEach(r => {
+            itens.push({ data: r.dataIso, tipo: 'Recebido', desc: r.descricao, valor: r.valor });
+        });
+        state.data.despesas.filter(d => d.dataIso.startsWith(state.selectedYearMonth)).forEach(d => {
+            itens.push({ data: d.dataIso, tipo: 'Gasto', desc: d.descricao, valor: d.valor });
+        });
+        state.data.contasFixas.filter(c => c.mesInicioIso <= state.selectedYearMonth).forEach(c => {
+            const pago = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
+            if (pago === undefined) {
+                const [ano, mes] = state.selectedYearMonth.split('-');
+                const dia = Math.min(c.diaVencimento, new Date(ano, mes, 0).getDate());
+                itens.push({ data: `${state.selectedYearMonth}-${String(dia).padStart(2,'0')}`, tipo: 'Conta Fixa (Prevista)', desc: c.descricao, valor: c.valorMedio });
+            }
+        });
+        return itens.sort((a,b) => a.data.localeCompare(b.data));
+    }
+
+    function abrirOpcoesExportacao() {
+        const modal = document.createElement('div');
+        modal.style.cssText = "position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; padding:20px;";
+        modal.innerHTML = `
+            <div class="card" style="width:100%; max-width:400px; background:white;">
+                <h3>Como deseja compartilhar?</h3>
+                <p style="margin: 12px 0; color:#666; font-size:15px;">Escolha o formato para enviar via WhatsApp ou outro app:</p>
+                <button class="btn-primary" onclick="exportarTextoWhatsApp(); document.body.lastChild.remove();">Mensagem de Texto (WhatsApp)</button>
+                <button class="btn-secondary" onclick="exportarExcelCsv(); document.body.lastChild.remove();">Planilha Excel (.CSV)</button>
+                <button class="fab-back" style="width:100%; margin-top:12px;" onclick="this.parentElement.parentElement.remove()">Cancelar</button>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+
+    function exportarTextoWhatsApp() {
+        const prevType = state.summaryType;
+        state.summaryType = 'mes';
+        const res = calcularResumo();
+        state.summaryType = prevType;
+
+        const itens = obterItensCronologicos();
+        let txt = `📊 *RESUMO DE GASTOS - ${state.selectedYearMonth}*\n`;
+        txt += `• Valor Inicial: ${fmtMoeda(res.inicial)}\n`;
+        txt += `• Valor Gasto: ${fmtMoeda(res.gasto)}\n`;
+        txt += `• *Valor Restante: ${fmtMoeda(res.restante)}*\n\n`;
+        txt += `📅 *EXTRATO CRONOLÓGICO:*\n`;
+
+        if (itens.length === 0) txt += `Nenhum lançamento neste mês.\n`;
+        itens.forEach(i => {
+            const [ano, mes, dia] = i.data.split('-');
+            const dataFmt = `${dia}/${mes}/${ano}`;
+            const sinal = i.tipo === 'Recebido' ? '+' : '-';
+            txt += `${dataFmt} | ${i.tipo}: ${i.desc} (${sinal}${fmtMoeda(i.valor)})\n`;
+        });
+
+        if (navigator.share) {
+            navigator.share({ title: 'Resumo de Gastos', text: txt }).catch(() => {});
+        } else {
+            navigator.clipboard.writeText(txt);
+            alert('Resumo copiado para a área de transferência!');
+        }
+    }
+
+    function exportarExcelCsv() {
+        const itens = obterItensCronologicos();
+        let csv = "\uFEFFData;Tipo;Descricao;Valor (R$)\n";
+        itens.forEach(i => {
+            const [ano, mes, dia] = i.data.split('-');
+            const dataFmt = `${dia}/${mes}/${ano}`;
+            const sinal = i.tipo === 'Recebido' ? '' : '-';
+            const valStr = i.valor.toFixed(2).replace('.', ',');
+            csv += `${dataFmt};${i.tipo};${i.desc};${sinal}${valStr}\n`;
+        });
+
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const file = new File([blob], `Gastos_${state.selectedYearMonth}.csv`, { type: 'text/csv' });
+
+        // Tenta compartilhar o arquivo direto pelo WhatsApp no celular; se não suportar, faz download
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            navigator.share({ files: [file], title: `Gastos_${state.selectedYearMonth}.csv` }).catch(() => {});
+        } else {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `Gastos_${state.selectedYearMonth}.csv`;
+            a.click();
+        }
+    }
+
+    function verificarContasVencendoHoje() {
+        const hojeIso = new Date().toISOString().slice(0,10);
+        const [ano, mes, diaHoje] = hojeIso.split('-').map(Number);
+        const mesAtual = hojeIso.slice(0,7);
+        
+        state.data.contasFixas.forEach(c => {
+            const key = `${c.id}_${mesAtual}`;
+            const diaValido = Math.min(c.diaVencimento, new Date(ano, mes, 0).getDate());
+            if (diaValido === diaHoje && state.data.pagamentosContas[key] === undefined) {
+                setTimeout(() => {
+                    const el = document.getElementById('aviso-vencimento-hoje');
+                    if(el) {
+                        el.style.display = 'block';
+                        el.innerHTML = `⚠️ <strong>Conta vence hoje:</strong> ${c.descricao}. <a href="#" onclick="pedirBaixaConta('${c.id}'); return false;">Dar baixa agora</a>`;
+                    }
+                }, 100);
+            }
+        });
+    }
+
+    render();
+</script>
+</body>
+</html>
