@@ -181,6 +181,8 @@ function obterSemanasDoMes(yearMonth) {
     let proxMes = mes + 1;
     if (proxMes > 12) { proxMes = 1; proxAno++; }
 
+    const dataLimiteDia4 = new Date(proxAno, proxMes - 1, 4, 12, 0, 0);
+
     let diaInicio = 1;
     let numSemana = 1;
 
@@ -192,9 +194,7 @@ function obterSemanasDoMes(yearMonth) {
 
         let diaFim;
         if (diaFimProvisorio >= ultimoDiaMes) {
-            const dataLimiteDia4 = new Date(proxAno, proxMes - 1, 4, 12, 0, 0);
             let dataDomingoUltima = new Date(ano, mes - 1, diaFimProvisorio, 12, 0, 0);
-            
             if (dataDomingoUltima <= dataLimiteDia4) {
                 diaFim = diaFimProvisorio;
             } else {
@@ -248,7 +248,7 @@ function calcularDadosSemanais(yearMonth) {
 
     let contasAtivas = [];
     let totalContasMes = 0;
-    
+
     state.data.contasFixas.forEach(c => {
         const inicioOk = c.mesInicioIso <= yearMonth;
         const fimOk = !c.mesFimIso || c.mesFimIso >= yearMonth;
@@ -256,8 +256,8 @@ function calcularDadosSemanais(yearMonth) {
 
         const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${yearMonth}`];
         const estaPaga = pagamentoInfo !== undefined && pagamentoInfo.valor !== undefined;
-        const valorConta = estaPaga 
-            ? parseFloat(pagamentoInfo.valor) || 0 
+        const valorConta = estaPaga
+            ? parseFloat(pagamentoInfo.valor) || 0
             : parseFloat(c.valorMedio) || 0;
 
         const diaVenc = Math.min(c.diaVencimento, diasNoMes);
@@ -334,42 +334,25 @@ function calcularDadosSemanais(yearMonth) {
             somaContasPagas,
             somaContasAPagar
         } = contasPorSemana[idx];
+
         const receitasNaSemana = receitasMes.filter(r => r.dataIso >= sem.inicioIso && r.dataIso <= sem.fimIso);
+        const totalRecebidoNaSemana = receitasNaSemana.reduce((acc, r) => acc + (parseFloat(r.valor) || 0), 0);
 
-        let valorBaseSemana = 0;
+        if (totalRecebidoNaSemana > 0) {
+            const diasRestantesCiclo = diasEntreInclusivo(sem.inicioIso, fimCicloIso);
+            const saldoRestanteAnterior = diasRestantesCiclo * taxaDiariaAtual;
 
-        if (receitasNaSemana.length === 0) {
-            valorBaseSemana = arredondar(taxaDiariaAtual * sem.diasNaSemana);
-        } else {
-            let cursorIso = sem.inicioIso;
-            let acumuladoSemana = 0;
+            let valorNovo = totalRecebidoNaSemana;
+            if (contasNaoCobertas > 0) {
+                const abatimentoContas = Math.min(valorNovo, contasNaoCobertas);
+                valorNovo -= abatimentoContas;
+                contasNaoCobertas = arredondar(contasNaoCobertas - abatimentoContas);
+            }
 
-            receitasNaSemana.forEach(r => {
-                const dataRecIso = r.dataIso < sem.inicioIso ? sem.inicioIso : r.dataIso;
-                const diasAntesRec = diasEntreInclusivo(cursorIso, sem.fimIso) - diasEntreInclusivo(dataRecIso, sem.fimIso);
-                if (diasAntesRec > 0) {
-                    acumuladoSemana += diasAntesRec * taxaDiariaAtual;
-                }
-
-                const diasRestantesCiclo = diasEntreInclusivo(dataRecIso, fimCicloIso);
-                const saldoRestanteAnterior = diasRestantesCiclo * taxaDiariaAtual;
-
-                let valorNovo = parseFloat(r.valor) || 0;
-                if (contasNaoCobertas > 0) {
-                    const abatimentoContas = Math.min(valorNovo, contasNaoCobertas);
-                    valorNovo -= abatimentoContas;
-                    contasNaoCobertas = arredondar(contasNaoCobertas - abatimentoContas);
-                }
-
-                taxaDiariaAtual = diasRestantesCiclo > 0 ? ((saldoRestanteAnterior + valorNovo) / diasRestantesCiclo) : 0;
-                cursorIso = dataRecIso;
-            });
-
-            const diasFinaisSemana = diasEntreInclusivo(cursorIso, sem.fimIso);
-            acumuladoSemana += diasFinaisSemana * taxaDiariaAtual;
-            valorBaseSemana = arredondar(acumuladoSemana);
+            taxaDiariaAtual = diasRestantesCiclo > 0 ? ((saldoRestanteAnterior + valorNovo) / diasRestantesCiclo) : 0;
         }
 
+        const valorBaseSemana = arredondar(taxaDiariaAtual * sem.diasNaSemana);
         const recebidoSemana = arredondar(valorBaseSemana + somaContasSemana);
 
         const gastoAvulsoSemana = arredondar(
@@ -445,7 +428,7 @@ function calcularDadosBannerHome() {
     });
 
     const contasFixasTotalMes = arredondar(totalContasPagasMes + totalContasPendentesMes);
-    
+
     const avulsas = arredondar(
         state.data.despesas
             .filter(d => d.dataIso && d.dataIso.startsWith(state.selectedYearMonth))
@@ -463,7 +446,7 @@ function calcularDadosBannerHome() {
         const isNegativo = restoFinal < 0;
         const corValor = isNegativo ? '#dc2626' : '#047857';
         const tituloCard = isNegativo ? 'Valor que faltou:' : 'Valor que sobrou guardado:';
-        
+
         const textoBanner = `
             <div style="color: #334155; font-size: 16px; margin-bottom: 4px;">${tituloCard}</div>
             <span style="font-size: 26px; font-weight: 800; color: ${corValor};">${fmtMoeda(restoFinal)}</span>
@@ -472,7 +455,7 @@ function calcularDadosBannerHome() {
     } else {
         const dadosSemestrais = calcularDadosSemanais(state.selectedYearMonth);
         const hojeIsoStr = hojeIso();
-        
+
         let semanaAtualObj = dadosSemestrais.semanas.find(s => hojeIsoStr >= s.inicioIso && hojeIsoStr <= s.fimIso);
         if (!semanaAtualObj && dadosSemestrais.semanas.length > 0) {
             semanaAtualObj = hojeIsoStr < dadosSemestrais.semanas[0].inicioIso ? dadosSemestrais.semanas[0] : dadosSemestrais.semanas[dadosSemestrais.semanas.length - 1];
@@ -519,7 +502,7 @@ function render() {
             case 'summary': app.appendChild(renderSummary()); break;
             case 'success': app.appendChild(renderSuccess()); break;
             case 'confirm-pagamento': app.appendChild(renderConfirmPagamento()); break;
-            default: 
+            default:
                 state.currentScreen = 'home';
                 app.appendChild(renderHome());
                 break;
@@ -596,7 +579,7 @@ function mudarMes(delta) {
     mes += delta;
     if (mes > 12) { mes = 1; ano++; }
     if (mes < 1) { mes = 12; ano--; }
-    
+
     const novoMesStr = `${ano}-${String(mes).padStart(2, '0')}`;
     const hoje = new Date();
     const atualYearMonth = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
@@ -638,7 +621,7 @@ function renderFormReceita() {
         <input type="text" id="val-rec" placeholder="0,00" inputmode="numeric" oninput="aplicarMascaraMoeda(this)">
         <label>Dia que recebeu</label>
         <input type="number" id="dia-rec" min="1" max="${ultimoDia}" value="${diaHojeSugerido}">
-        
+
         <div class="form-actions">
             <button class="fab-back" onclick="navegar('home')">← Voltar</button>
             <button class="btn-salvar-direito" onclick="salvarReceita()">Salvar</button>
@@ -670,7 +653,7 @@ function salvarReceita() {
     const val = obterValorNumericoMascara('val-rec');
     const dia = parseInt(document.getElementById('dia-rec').value, 10);
     const ultimoDia = obterUltimoDiaMes(state.selectedYearMonth);
-    
+
     if (!desc || isNaN(val) || val <= 0 || isNaN(dia)) { alert('Preencha todos os campos corretamente!'); return; }
     if (dia < 1 || dia > ultimoDia) { alert(`O dia deve estar entre 1 e ${ultimoDia} para este mês!`); return; }
 
@@ -752,7 +735,7 @@ function renderFormDespesa() {
         </select>
         <label>Dia do gasto</label>
         <input type="number" id="dia-desp" min="1" max="${ultimoDia}" value="${diaHojeSugerido}">
-        
+
         <div class="form-actions">
             <button class="fab-back" onclick="navegar('home')">← Voltar</button>
             <button class="btn-salvar-direito" onclick="salvarDespesa()">Salvar</button>
@@ -786,19 +769,19 @@ function salvarDespesa() {
     const formaPagamento = document.getElementById('forma-pagamento-desp').value;
     const dia = parseInt(document.getElementById('dia-desp').value, 10);
     const ultimoDia = obterUltimoDiaMes(state.selectedYearMonth);
-    
+
     if (!desc || isNaN(val) || val <= 0 || isNaN(dia)) { alert('Preencha todos os campos corretamente!'); return; }
     if (dia < 1 || dia > ultimoDia) { alert(`O dia deve estar entre 1 e ${ultimoDia} para este mês!`); return; }
 
     const dataIso = `${state.selectedYearMonth}-${String(dia).padStart(2, '0')}`;
 
-    state.data.despesas.push({ 
-        id: crypto.randomUUID(), 
-        descricao: desc, 
-        valor: val, 
+    state.data.despesas.push({
+        id: crypto.randomUUID(),
+        descricao: desc,
+        valor: val,
         dataIso: dataIso,
         categoria: categoria || '',
-        formaPagamento: formaPagamento 
+        formaPagamento: formaPagamento
     });
 
     const detalhesLog = [categoria, formaPagamento].filter(Boolean).join(' • ');
@@ -838,20 +821,20 @@ function renderFormContaFixa() {
     contasAtivas.forEach(c => {
         const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
         const estaPaga = pagamentoInfo !== undefined;
-        
+
         let infoSub = `Vencimento dia ${c.diaVencimento}`;
         if (estaPaga && pagamentoInfo.dataIso) {
             const diaP = pagamentoInfo.dataIso.split('-')[2];
             infoSub = `Vencimento dia ${c.diaVencimento} • Pago no dia ${diaP}`;
         }
 
-        const statusHtml = estaPaga 
+        const statusHtml = estaPaga
             ? `<span style="color: #065f46; font-weight: 800;">🟢 Conta Paga</span> - <span style="color: #111827; font-weight:800;">${fmtMoeda(pagamentoInfo.valor)}</span>`
             : `<span style="color: #991b1b; font-weight: 800;">🔴 Pendente</span> - <span style="color: #111827; font-weight:800;">${fmtMoeda(c.valorMedio)}</span>`;
 
         let botoesAcao = '';
         if (!passado) {
-            botoesAcao = estaPaga 
+            botoesAcao = estaPaga
                 ? `<button class="btn-secondary" style="width: auto; padding: 8px 12px; font-size: 15px; height: auto; border-color:#047857; color:#047857;" onclick="pedirBaixaConta('${c.id}')">Alterar Valor</button>`
                 : `
                     <button class="btn-success-small" style="width: auto; padding: 10px 14px; font-size: 15px; height: auto;" onclick="pedirBaixaConta('${c.id}')">Paguei</button>
@@ -881,7 +864,7 @@ function renderFormContaFixa() {
         <input type="text" id="val-conta" placeholder="0,00" inputmode="numeric" oninput="aplicarMascaraMoeda(this)">
         <label>Dia do vencimento</label>
         <input type="number" id="dia-conta" min="1" max="31" placeholder="Ex: 10">
-        
+
         <div class="form-actions">
             <button class="fab-back" onclick="navegar('home')">← Voltar</button>
             <button class="btn-salvar-direito" onclick="salvarContaFixa()">Salvar</button>
@@ -968,17 +951,17 @@ function renderConfirmPagamento() {
     const tituloTela = jaPaga ? `Alterar valor pago: ${c.descricao}` : `Pagar conta: ${c.descricao}`;
     const valorFormatadoInicial = valorAtual.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-    div = document.createElement('div');
+    const div = document.createElement('div');
     div.innerHTML = `
         <div>
             ${renderHeaderMesFixo()}
             <h2 style="font-size: 22px; text-align: left; margin-bottom: 16px; color: #ffffff;">${tituloTela}</h2>
             <label style="margin-top:20px;">Valor real pago (R$):</label>
             <input type="text" id="val-real-pago" value="${valorFormatadoInicial}" inputmode="numeric" oninput="aplicarMascaraMoeda(this)">
-            
+
             <label>Dia do pagamento</label>
             <input type="number" id="dia-real-pago" min="1" max="${ultimoDia}" value="${diaAtual}">
-            
+
             <div class="form-actions">
                 <button class="fab-back" onclick="navegar('conta')">← Voltar</button>
                 <button class="btn-salvar-direito" onclick="confirmarPagamentoReal()">Salvar</button>
@@ -996,7 +979,7 @@ function confirmarPagamentoReal() {
     const ultimoDia = obterUltimoDiaMes(state.selectedYearMonth);
     const diaPagamento = elDia ? parseInt(elDia.value, 10) : 1;
     const pagamentoAnterior = state.data.pagamentosContas[`${state.activeContaParaPagar.id}_${state.selectedYearMonth}`];
-    
+
     if (isNaN(valReal) || valReal <= 0 || isNaN(diaPagamento)) { alert('Preencha os campos corretamente!'); return; }
     if (diaPagamento < 1 || diaPagamento > ultimoDia) { alert(`O dia deve estar entre 1 e ${ultimoDia} para este mês!`); return; }
 
@@ -1140,7 +1123,7 @@ function toggleGastoDetalhes() {
 function renderSummary() {
     const res = calcularResumo();
     const div = document.createElement('div');
-    
+
     let htmlDetalhesGasto = '';
     if (state.summaryType === 'mes' && state.gastoDetalhesAberto) {
         let htmlContasPagasLista = '';
@@ -1285,7 +1268,7 @@ function obterItensCronologicos() {
         if (inicioOk && fimOk) {
             const pagamentoInfo = state.data.pagamentosContas[`${c.id}_${state.selectedYearMonth}`];
             const valorEfetivo = (pagamentoInfo !== undefined && pagamentoInfo.valor !== undefined) ? pagamentoInfo.valor : c.valorMedio;
-            
+
             let dataItem = `${state.selectedYearMonth}-${String(Math.min(c.diaVencimento, obterUltimoDiaMes(state.selectedYearMonth))).padStart(2,'0')}`;
             if (pagamentoInfo !== undefined && pagamentoInfo.dataIso) {
                 dataItem = pagamentoInfo.dataIso;
@@ -1347,13 +1330,13 @@ function abrirMenuOpcoes() {
         <div class="card" style="width:100%; max-width:400px; background:#ffffff; display:flex; flex-direction:column; gap:14px;">
             <h3 style="font-size: 22px; color: #111827; font-weight: bold;">⚙️ Opções e Dados</h3>
             <p style="color:#475569; font-size:16px; margin-bottom:4px; text-align: left; font-weight: bold;">Escolha o que deseja fazer:</p>
-            
+
             <button class="btn-primary" style="margin-top:0; font-size: 18px;" onclick="this.parentElement.parentElement.remove(); baixarBackupManualJson();">💾 Baixar Backup Atual</button>
             <button class="btn-secondary" style="margin-top:0; border-color: #047857; color: #047857; font-size: 18px;" onclick="this.parentElement.parentElement.remove(); abrirOpcoesExportacao();">📤 Compartilhar Resumo</button>
             <button class="btn-secondary" style="margin-top:0; border-color: #6b21a8; color: #6b21a8; font-size: 18px;" onclick="this.parentElement.parentElement.remove(); compartilharChangelog();">📋 Compartilhar Changelog</button>
             <button class="btn-secondary" style="margin-top:0; border-color: #047857; color: #047857; font-size: 18px;" onclick="this.parentElement.parentElement.remove(); acionarImportacaoCsv();">📥 Importar Dados (CSV)</button>
             <button class="btn-secondary" style="margin-top:0; border-color: #1d4ed8; color: #1d4ed8; font-size: 18px;" onclick="this.parentElement.parentElement.remove(); acionarRestauracaoJson();">🔄 Restaurar Backup</button>
-            
+
             <button class="fab-back" style="width:100%; margin-top:8px; justify-content:center;" onclick="this.parentElement.parentElement.remove()">Fechar</button>
         </div>
     `;
@@ -1589,7 +1572,7 @@ function verificarContasVencendoHoje() {
     const hojeIsoStr = hojeIso();
     const [ano, mes, diaHoje] = hojeIsoStr.split('-').map(Number);
     const mesAtual = hojeIsoStr.slice(0,7);
-    
+
     state.data.contasFixas.forEach(c => {
         const pago = state.data.pagamentosContas[`${c.id}_${mesAtual}`] !== undefined;
         if (pago) return;
